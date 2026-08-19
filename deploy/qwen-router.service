@@ -5,7 +5,7 @@ After=network-online.target
 [Service]
 Type=simple
 Environment=ROUTER_PASSTHROUGH=1
-ExecStart=/usr/bin/env python3 %h/llm/model-router.py 8787 http://127.0.0.1:8888 https://api.anthropic.com
+ExecStart=/usr/bin/env python3 %h/llm/qwen38-dflash2-spark/scripts/model-router.py 8787 http://127.0.0.1:8888 https://api.anthropic.com
 Restart=always
 RestartSec=5
 

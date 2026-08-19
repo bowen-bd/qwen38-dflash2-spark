@@ -2,7 +2,11 @@
 # Benchmark one SGLang arm with the identical suite used for the DSpark baseline.
 # ARM label comes in as $1 so DSpark-on-upstream and DFlash2 can share this script.
 ARM="${1:-dflash2}"
-OUT=/home/bdeng/llm/ab-results
+# Resolve siblings relative to this script so the repo is self-contained.
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Runtime output; override with OUT=... . Created on demand so the repo stays clean.
+OUT="${OUT:-$HOME/llm/bench-runs}"
+mkdir -p "$OUT"
 LOG=$OUT/${ARM}-bench.log
 exec >> "$LOG" 2>&1
 URL="${URL:-http://127.0.0.1:30000/v1}"
@@ -36,19 +40,19 @@ echo "--- $(mem)"
 grep -iE "KV Cache is allocated|max_total_num_tokens|Load weight end" "$SERVE_LOG" | tail -5
 
 echo; echo "--- workloads (batch-1 decode, thinking off)"
-timeout 2400 python3 /home/bdeng/llm/bench-workloads.py "$URL" "$MODEL"
+timeout 2400 python3 "$HERE"/bench-workloads.py "$URL" "$MODEL"
 
 echo; echo "--- concurrency + prefill"
-timeout 2400 python3 /home/bdeng/llm/bench-qwen38.py throughput --url "$URL" --model "$MODEL" \
+timeout 2400 python3 "$HERE"/bench-qwen38.py throughput --url "$URL" --model "$MODEL" \
     --concurrency 1 2 4 8 --prefill 1000 4000 16000
 
 echo; echo "--- vision (1 chart)"
-timeout 900 python3 /home/bdeng/llm/bench-qwen38.py vision --url "$URL" --model "$MODEL" \
-    --image /home/bdeng/llm/test-chart.png --effort none --max-tokens 400 \
+timeout 900 python3 "$HERE"/bench-qwen38.py vision --url "$URL" --model "$MODEL" \
+    --image "$HERE"/test-chart.png --effort none --max-tokens 400 \
     --question "Read this chart. List every bar with its tok/s and GB value."
 
 echo; echo "--- accuracy GSM8K 150 (identical settings to the DSpark baseline)"
-timeout 3600 python3 /home/bdeng/llm/bench-qwen38.py accuracy --url "$URL" --model "$MODEL" \
+timeout 3600 python3 "$HERE"/bench-qwen38.py accuracy --url "$URL" --model "$MODEL" \
     --n 150 --acc-conc 4 --effort none --max-tokens 768
 
 echo; echo "--- acceptance length from server log (spec decoding efficiency)"
