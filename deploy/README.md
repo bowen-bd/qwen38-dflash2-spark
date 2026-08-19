@@ -93,6 +93,29 @@ Two traps worth knowing:
   unset**, which uploads your real `~/.codex/auth.json` and authenticates against
   api.openai.com instead of the local server. Export `OPENAI_API_KEY=local`.
 
+## The Claude Code 500
+
+MiaAI's `start.sh` does not pass `--chat-template`, so the checkpoint's stock template is
+used -- and it rejects the `reasoning_effort: max` that Claude Code sends:
+
+```
+ValueError: Unexpected reasoning effort max. Supported types are xhigh (default), medium, and low.
+[Anthropic error response api_error] Internal server error
+```
+
+Every Claude Code request 500s. `serve-production.sh` fixes it by passing
+`scripts/sglang/chat-template-sglang.jinja`, which maps `max`/`high` -> `xhigh` and
+`minimal` -> `low`, and renders mid-conversation system turns as `<system-reminder>`
+blocks in place. Copy it under `HF_HOME` -- that is the only host directory mounted
+into the container:
+
+```bash
+cp scripts/sglang/chat-template-sglang.jinja ~/llm/miaai/.cache/huggingface/
+```
+
+Verified end-to-end after the fix: `claude --settings clients/claude-qwen.json -p "..."`
+returns a normal completion.
+
 ## Thinking is on by default
 
 The checkpoint defaults to `reasoning_effort: xhigh` and will burn tens of thousands

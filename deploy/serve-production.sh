@@ -35,6 +35,14 @@ SLOTS_PER_REQ="${SLOTS_PER_REQ:-5}"
 MEM_FRAC="${MEM_FRAC:-0.90}"
 MODEL_PATH="${MODEL_PATH:-/root/.cache/huggingface/radixark-nvfp4}"
 MIN_FREE_GIB="${MIN_FREE_GIB:-8}"
+# Claude Code sends reasoning_effort "max", which the checkpoint's stock template
+# rejects outright ("Unexpected reasoning effort max. Supported types are xhigh
+# (default), medium, and low.") -> HTTP 500 on every request. MiaAI's start.sh does
+# not pass --chat-template, so the stock one is used. Ours maps max/high -> xhigh and
+# minimal -> low, and renders mid-conversation system turns as <system-reminder>
+# blocks in place, which is what Claude Code sends. Must live under HF_HOME: that is
+# the only host directory mounted into the container.
+CHAT_TEMPLATE="${CHAT_TEMPLATE:-/root/.cache/huggingface/chat-template-sglang.jinja}"
 
 MAMBA_SLOTS=$(( CONCURRENCY * SLOTS_PER_REQ ))
 
@@ -58,7 +66,7 @@ fi
 cd "$MIAAI_DIR"
 export MAX_CONCURRENT_REQUESTS="$CONCURRENCY"
 export DF_TARGET="${DF_TARGET:-nvfp4}"
-export DF_EXTRA="--model-path ${MODEL_PATH} --max-total-tokens ${MAX_TOTAL} --max-mamba-cache-size ${MAMBA_SLOTS} ${DF_EXTRA:-}"
+export DF_EXTRA="--model-path ${MODEL_PATH} --max-total-tokens ${MAX_TOTAL} --max-mamba-cache-size ${MAMBA_SLOTS} --chat-template ${CHAT_TEMPLATE} ${DF_EXTRA:-}"
 
 echo "delegating to ${MIAAI_DIR}/start-dflash.sh"
 exec ./start-dflash.sh
