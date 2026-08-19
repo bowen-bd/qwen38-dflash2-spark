@@ -132,36 +132,61 @@ Both extensions ship in `~/.antigravity-ide-server/extensions/`. Neither exposes
 custom-endpoint setting in its UI, so selection happens through each tool's normal
 config — which is also what the vendors document.
 
-### Claude Code extension — a real in-UI choice
+### Claude Code extension — add a custom entry to the model picker
 
 The extension launches the Claude Code CLI, so it reads `~/.claude/settings.json` and
 `./.claude/settings.json` (project wins). Its own `claudeCode.environmentVariables`
 setting exists but its description says *"Prefer setting environment variables in
 Claude's settings.json"*, so use settings.json.
 
-Set **only** the base URL, pointed at the router — do not set `ANTHROPIC_MODEL`:
+**The model picker is a fixed list of Anthropic tiers — `/model` will not accept an
+arbitrary name there, even though the CLI's `--model` flag will.** To get a real entry
+in the picker you need [`ANTHROPIC_CUSTOM_MODEL_OPTION`][mc], which adds a custom option
+and skips model-ID validation:
 
 ```json
-{ "env": { "ANTHROPIC_BASE_URL": "http://127.0.0.1:8787" } }
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://127.0.0.1:8787",
+    "ANTHROPIC_CUSTOM_MODEL_OPTION": "qwen3.8-27b-sglang",
+    "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME": "Qwen3.8-27B (local)",
+    "ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION": "NVFP4 + DFlash2 on this DGX Spark"
+  }
+}
 ```
 
-The default model stays Anthropic and `/model qwen3.8-27b-sglang` switches to local,
-because the router dispatches on model name. Verified: with this file in place and no
-CLI flags, `claude --model qwen3.8-27b-sglang -p ...` returned a completion and the
-router logged `qwen3.8-27b-sglang -> local [200]`.
+`ANTHROPIC_MODEL` is deliberately unset, so Anthropic stays the default and the local
+model is one entry among the others; the router dispatches on model name. Verified that
+the CLI resolves `qwen3.8-27b-sglang` through the router with this file alone and no
+flags. Both the CLI binary (2.1.201) and the extension bundle (2.1.235) reference
+`ANTHROPIC_CUSTOM_MODEL_OPTION{,_NAME,_DESCRIPTION,_SUPPORTED_CAPABILITIES}`.
+
+Env is read once at process start, so **reload the window** after editing.
+
+Two alternatives if the custom entry is not enough:
+
+- **Remap a tier.** `ANTHROPIC_DEFAULT_HAIKU_MODEL=qwen3.8-27b-sglang` (plus
+  `..._NAME`) makes the existing "Haiku" entry serve the local model, leaving Sonnet and
+  Opus real. Useful when you want the local model as the cheap tier.
+- **Pin the session.** `ANTHROPIC_MODEL=qwen3.8-27b-sglang` ignores the picker entirely.
+  That is what `clients/claude-qwen.json` does.
+
+If `availableModels` is set anywhere in your settings, the custom ID must be added to
+that allowlist too, or it gets filtered out of the picker.
 
 Project scope is the safer default — it merges with your global settings rather than
-replacing them, and leaves Claude Code everywhere else untouched. Copy
-`clients/claude-settings-project.json` into a workspace's `.claude/`, or into
-`~/.claude/settings.json` (merging with the existing `permissions` block) to get the
-choice in every folder.
-
-Run the router as a service so the extension never depends on a stray process:
+replacing them, and leaves Claude Code in other folders untouched. It only applies to
+that workspace, so copy `clients/claude-settings-project.json` into
+`~/.claude/settings.json` (merging with the existing `permissions` block) if you want
+the entry in every folder. Note that routes *all* your Claude Code traffic through the
+router, so run it as a service:
 
 ```bash
 cp deploy/qwen-router.service ~/.config/systemd/user/
 systemctl --user daemon-reload && systemctl --user enable --now qwen-router
 ```
+
+[mc]: https://code.claude.com/docs/en/model-config
 
 ### Codex extension — a toggle, not a picker
 
