@@ -20,10 +20,9 @@ wire_api = "responses"
 # SGLang does not check the key, but codex requires one to be present.
 env_key = "QWEN_LOCAL_API_KEY"
 
-[profiles.qwen-local]
-model = "qwen3.8-27b-sglang"
-model_provider = "qwen-local"
-# The checkpoint defaults to reasoning_effort xhigh and will burn tens of
-# thousands of tokens on trivial prompts. Only low/medium/xhigh are accepted --
-# "none" is rejected.
-model_reasoning_effort = "low"
+# NOTE: codex >= 0.148 rejects [profiles.<name>] inside config.toml --
+#   "--profile qwen-local cannot be used while config.toml contains legacy
+#    profile = ... or [profiles.qwen-local]; move those settings into
+#    ~/.codex/qwen-local.config.toml"
+# Provider definitions must stay here (project .codex/config.toml cannot define
+# providers), but the profile goes in its own file. See clients/qwen-local.config.toml.

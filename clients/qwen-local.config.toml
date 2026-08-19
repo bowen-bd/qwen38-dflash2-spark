@@ -1,0 +1,8 @@
+# ~/.codex/qwen-local.config.toml  -- codex >= 0.148 profile file.
+# Selected with: codex exec --profile qwen-local "..."
+# The provider itself lives in ~/.codex/config.toml as [model_providers.qwen-local];
+# codex only reads provider definitions from the user-level config.
+model = "qwen3.8-27b-sglang"
+model_provider = "qwen-local"
+# Default is xhigh, which burns tens of thousands of tokens on trivial prompts.
+model_reasoning_effort = "low"

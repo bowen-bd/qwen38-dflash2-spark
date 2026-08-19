@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# codex, pinned to the local Qwen server. Point the Antigravity ChatGPT extension at
+# this via the "chatgpt.cliExecutable" setting. Uses a separate CODEX_HOME so no
+# argument rewriting is needed and ~/.codex is left alone.
+export CODEX_HOME="${CODEX_HOME_QWEN:-$HOME/.codex-qwen}"
+export QWEN_LOCAL_API_KEY="${QWEN_LOCAL_API_KEY:-local}"
+BUNDLED=$(ls -d "$HOME"/.antigravity-ide-server/extensions/openai.chatgpt-*/bin/linux-aarch64/codex 2>/dev/null | sort -V | tail -1)
+exec "${CODEX_BIN:-$BUNDLED}" "$@"

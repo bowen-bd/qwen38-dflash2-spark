@@ -126,6 +126,73 @@ Two traps worth knowing:
   unset**, which uploads your real `~/.codex/auth.json` and authenticates against
   api.openai.com instead of the local server. Export `OPENAI_API_KEY=local`.
 
+## Antigravity IDE extensions
+
+Both extensions ship in `~/.antigravity-ide-server/extensions/`. Neither exposes a
+custom-endpoint setting in its UI, so selection happens through each tool's normal
+config — which is also what the vendors document.
+
+### Claude Code extension — a real in-UI choice
+
+The extension launches the Claude Code CLI, so it reads `~/.claude/settings.json` and
+`./.claude/settings.json` (project wins). Its own `claudeCode.environmentVariables`
+setting exists but its description says *"Prefer setting environment variables in
+Claude's settings.json"*, so use settings.json.
+
+Set **only** the base URL, pointed at the router — do not set `ANTHROPIC_MODEL`:
+
+```json
+{ "env": { "ANTHROPIC_BASE_URL": "http://127.0.0.1:8787" } }
+```
+
+The default model stays Anthropic and `/model qwen3.8-27b-sglang` switches to local,
+because the router dispatches on model name. Verified: with this file in place and no
+CLI flags, `claude --model qwen3.8-27b-sglang -p ...` returned a completion and the
+router logged `qwen3.8-27b-sglang -> local [200]`.
+
+Project scope is the safer default — it merges with your global settings rather than
+replacing them, and leaves Claude Code everywhere else untouched. Copy
+`clients/claude-settings-project.json` into a workspace's `.claude/`, or into
+`~/.claude/settings.json` (merging with the existing `permissions` block) to get the
+choice in every folder.
+
+Run the router as a service so the extension never depends on a stray process:
+
+```bash
+cp deploy/qwen-router.service ~/.config/systemd/user/
+systemctl --user daemon-reload && systemctl --user enable --now qwen-router
+```
+
+### Codex extension — a toggle, not a picker
+
+The ChatGPT extension **bundles its own codex binary**
+(`bin/linux-aarch64/codex`, 0.148.0-alpha.15), which is why `codex` is not on your PATH
+yet the extension works. It contributes no endpoint, provider, or profile setting; the
+only relevant one is `chatgpt.cliExecutable`.
+
+So point that at `clients/codex-qwen`, a wrapper that sets a separate `CODEX_HOME`
+(`~/.codex-qwen`) whose *defaults* are the local server:
+
+```json
+{ "chatgpt.cliExecutable": "/home/<you>/.local/bin/codex-qwen" }
+```
+
+No argument rewriting, so every subcommand (`exec`, `mcp`, `app-server`) works, and your
+real `~/.codex` keeps `gpt-5.6-sol` as its default. Verified: the wrapper returned a
+completion in 5.0 s. Clearing that one setting switches the extension back to ChatGPT.
+
+For the CLI rather than the extension, `--profile qwen-local` works against the same
+provider. Note **codex >= 0.148 moved profiles into their own files** — a
+`[profiles.<name>]` table inside `config.toml` is now rejected outright:
+
+```
+--profile `qwen-local` cannot be used while config.toml contains legacy
+[profiles.qwen-local]; move those settings into ~/.codex/qwen-local.config.toml
+```
+
+Provider definitions must stay in the user-level `~/.codex/config.toml` — a project
+`.codex/config.toml` is not allowed to define providers.
+
 ## The Claude Code 500
 
 MiaAI's `start.sh` does not pass `--chat-template`, so the checkpoint's stock template is

@@ -1,0 +1,16 @@
+# Separate CODEX_HOME whose *defaults* are the local Qwen server, so the Antigravity
+# ChatGPT/Codex extension needs no flag injection -- every subcommand (exec, mcp,
+# app-server) just works. Selected via chatgpt.cliExecutable -> codex-qwen wrapper.
+# Your real ~/.codex stays untouched and keeps gpt-5.6-sol as its default.
+model = "qwen3.8-27b-sglang"
+model_provider = "qwen-local"
+model_reasoning_effort = "low"
+
+[model_providers.qwen-local]
+name = "Qwen3.8-27B (local SGLang, DFlash2)"
+base_url = "http://127.0.0.1:8888/v1"
+wire_api = "responses"
+env_key = "QWEN_LOCAL_API_KEY"
+
+[projects."/tmp"]
+trust_level = "trusted"
