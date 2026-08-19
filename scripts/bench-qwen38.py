@@ -11,6 +11,7 @@ are directly comparable.
 """
 import argparse
 import json
+import os
 import statistics
 import sys
 import threading
@@ -117,7 +118,9 @@ def throughput(args):
               f"({toks/wall/conc:5.2f} tok/s per stream)")
 
 
-GSM_PATH = "/home/bdeng/llm/gsm8k_test.json"
+GSM_PATH = os.environ.get(
+    "GSM8K_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "gsm8k_test.json")
+)
 NUM_RE = __import__("re").compile(r"-?\d+(?:\.\d+)?")
 
 

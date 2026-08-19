@@ -12,9 +12,10 @@
 set -euo pipefail
 
 IMAGE="${IMAGE:-lmsysorg/sglang@sha256:febfb971c7352570fc445c466ebd6ffc9d896024958e544a60f2137fd85856b1}"
-MODEL_DIR="${MODEL_DIR:-/home/bdeng/llm/radixark-nvfp4}"
-DRAFT_DIR="${DRAFT_DIR:-/home/bdeng/llm/radixark-dspark}"
-CONFIG_DIR="${CONFIG_DIR:-/home/bdeng/llm/sglang}"
+QWEN_HOME="${QWEN_HOME:-$HOME/llm}"
+MODEL_DIR="${MODEL_DIR:-$QWEN_HOME/radixark-nvfp4}"
+DRAFT_DIR="${DRAFT_DIR:-$QWEN_HOME/radixark-dspark}"
+CONFIG_DIR="${CONFIG_DIR:-$QWEN_HOME/sglang}"
 PORT="${PORT:-30000}"
 MEM_FRAC="${MEM_FRAC:-0.50}"
 SPEC="${SPEC:-DSPARK}"   # DSPARK, or EAGLE for the checkpoint's own MTP head

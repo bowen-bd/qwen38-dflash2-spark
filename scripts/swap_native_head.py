@@ -19,9 +19,10 @@ import sys
 
 import numpy as np
 
-SRC = sys.argv[1] if len(sys.argv) > 1 else "/home/bdeng/llm/radixark-nvfp4-dflash2"
-REF = sys.argv[2] if len(sys.argv) > 2 else "/home/bdeng/llm/qwen38-27b-fp8"
-DST = sys.argv[3] if len(sys.argv) > 3 else "/home/bdeng/llm/radixark-nvfp4-bf16head"
+HOME = os.environ.get("QWEN_HOME", os.path.expanduser("~/llm"))
+SRC = sys.argv[1] if len(sys.argv) > 1 else os.path.join(HOME, "radixark-nvfp4-dflash2")
+REF = sys.argv[2] if len(sys.argv) > 2 else os.path.join(HOME, "qwen38-27b-fp8")
+DST = sys.argv[3] if len(sys.argv) > 3 else os.path.join(HOME, "radixark-nvfp4-bf16head")
 WK = "lm_head.weight"
 
 

@@ -28,7 +28,8 @@
 # so nothing is re-downloaded.
 set -euo pipefail
 
-MIAAI_DIR="${MIAAI_DIR:-/home/bdeng/llm/miaai}"
+QWEN_HOME="${QWEN_HOME:-$HOME/llm}"
+MIAAI_DIR="${MIAAI_DIR:-$QWEN_HOME/miaai}"
 CONCURRENCY="${CONCURRENCY:-8}"
 MAX_TOTAL="${MAX_TOTAL:-200000}"
 SLOTS_PER_REQ="${SLOTS_PER_REQ:-5}"

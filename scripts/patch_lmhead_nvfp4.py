@@ -32,8 +32,9 @@ import sys
 
 import numpy as np
 
-SRC = sys.argv[1] if len(sys.argv) > 1 else "/home/bdeng/llm/radixark-nvfp4"
-DST = sys.argv[2] if len(sys.argv) > 2 else "/home/bdeng/llm/radixark-nvfp4-dflash2"
+HOME = os.environ.get("QWEN_HOME", os.path.expanduser("~/llm"))
+SRC = sys.argv[1] if len(sys.argv) > 1 else os.path.join(HOME, "radixark-nvfp4")
+DST = sys.argv[2] if len(sys.argv) > 2 else os.path.join(HOME, "radixark-nvfp4-dflash2")
 ROWS = 8192
 
 DROP = ("lm_head.weight_scale", "lm_head.weight_scale_2", "lm_head.input_scale")

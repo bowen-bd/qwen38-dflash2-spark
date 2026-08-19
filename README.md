@@ -36,6 +36,49 @@ get it.
 
 [mia]: https://github.com/MiaAI-Lab/Qwen3.8-27B-SGLang-DGX-Spark
 
+## Quickstart
+
+```bash
+git clone https://github.com/bowen-bd/qwen38-dflash2-spark.git && cd qwen38-dflash2-spark
+./setup.sh                    # clones the serving stack, builds the image, fetches weights
+deploy/serve-production.sh    # :8888, model qwen3.8-27b-sglang
+clients/smoke-test.sh         # 9 checks across all three wire protocols
+```
+
+Everything lands under `$QWEN_HOME` (default `~/llm`). No path in this repo is specific
+to the machine it was developed on, and the GSM8K test split is vendored, so the accuracy
+benchmark needs no external fetch.
+
+## Do you need this repo?
+
+**If you only want to serve the model: no.** Clone [MiaAI-Lab][mia] and stop. Their stack
+is better tuned for GB10 than anything here — FP8 KV, GDN pool sizing, mamba memory
+ratio, CPU pinning, and an in-place quantized `lm_head` that avoids dequantizing 2.5 GB.
+This repo *delegates* serving to them precisely because they do it better.
+
+**This repo adds four things their repo does not have:**
+
+1. **Accuracy.** They publish no correctness numbers at all. This is the only measurement
+   of whether DFlash2 is lossless on NVFP4: GSM8K **144/150 for both drafters** on an
+   identical stack, and 143 → 144 → 145 as `lm_head` fidelity rises.
+2. **A controlled comparison.** Their benchmark is two numbers with no control. The
+   three-arm design here separates the *drafter* from the *stack change it requires* —
+   which is why the isolated +41–54% and the end-to-end +8–29% are both true and are
+   different quantities.
+3. **Three bugs**, two of which bite their own stack: the GDN pool needs **5 slots per
+   request, not 4** (worth +54% at 8 streams), and their config **500s every Claude Code
+   request** because no `--chat-template` is passed.
+4. **Agent integration.** Claude Code, Codex, and Harbor wiring, with a smoke test —
+   none of which exists upstream.
+
+**Also still needed for vLLM.** Their `lm_head` fix is SGLang-only. vLLM's DFlash2 PR is
+still open with the quantized-head gap unresolved, so `scripts/patch_lmhead_nvfp4.py`
+remains the only route there.
+
+If findings 3 are upstreamed and accepted, that part of this repo's value merges into
+theirs — which would be a good outcome, and the measurement and integration layers would
+remain.
+
 ## The three arms
 
 Everything held constant except where noted: same NVFP4 body, same 200,000-token KV
@@ -201,49 +244,39 @@ just the drafter, it would quietly degrade quality rather than crash.
 
 ## Reproducing
 
-No CUDA image contains DFlash2 yet (newest nightly at time of writing: `20260818`, the PR
-merged the 19th). The image here is a **fork** — `561c8f3` is not an upstream commit, and it
-lacks `mamba_extra_buffer_enabled` — so overlaying just the PR's three files fails on import.
-Overlaying the *whole* upstream Python tree onto the fork's compiled kernels works, imports
-cleanly, and keeps the engine build constant across arms:
+`./setup.sh` does all of this; the steps are spelled out here for transparency.
+
+No published SGLang tag ships DFlash2 — it merged upstream on 2026-08-19, after every
+tag — so it is overlaid onto the pinned `qwen38-27b` base image. The overlay is five
+hand-adapted files plus a patch that lets the selector drive a **quantized** `lm_head`
+in place, all from [MiaAI-Lab][mia]'s `patch/`. Two things make the naive approach fail:
+
+- The base image is a **fork**: `561c8f3` is not an upstream commit and it lacks
+  `mamba_extra_buffer_enabled`, so upstream's `spec_utils` will not import against it.
+- Pin upstream at the **merge commit** `c14312a66`, not `main`. Later drift pulls in
+  symbols the fork does not have, which is why a minimal overlay taken from HEAD
+  cascades into a whole-tree swap.
+
+Benchmarks:
 
 ```bash
-git clone --depth 1 --filter=blob:none --sparse https://github.com/sgl-project/sglang.git
-cd sglang && git sparse-checkout set python/sglang
+scripts/bench-dflash2.sh myrun        # workloads, concurrency, prefill, vision, GSM8K
+OUT=/tmp/runs scripts/bench-dflash2.sh myrun
+URL=http://127.0.0.1:8888/v1 MODEL=qwen3.8-27b-sglang scripts/bench-dflash2.sh myrun
 ```
-
-Then give the target a dense head and serve:
-
-```bash
-python3 scripts/patch_lmhead_nvfp4.py  radixark-nvfp4  radixark-nvfp4-dflash2
-# better: python3 scripts/swap_native_head.py radixark-nvfp4-dflash2 qwen38-27b-fp8 radixark-nvfp4-bf16head
-
-MEM_FRAC=0.78 MAX_TOTAL=200000 SPEC=DFLASH2 CG_MAX_BS=8 WEIGHTS_GIB=36.6 \
-  MODEL_DIR=$PWD/radixark-nvfp4-dflash2 \
-  DRAFT_DIR=$PWD/dflash2-drafter \
-  UPSTREAM_TREE=$PWD/sglang/python/sglang \
-  scripts/run-sglang.sh
-
-scripts/bench-dflash2.sh dflash2      # workloads, concurrency, prefill, vision, GSM8K
-```
-
-`SPEC` takes `DSPARK`, `DFLASH2`, or `EAGLE`. Drafter:
-`incoai/Qwen3.8-27B-DFlash2` (3.6 GB) — fetch with `scripts/pardl.py` if HF's Xet endpoint
-is unreachable, which it is on this host.
 
 ### Two things that will bite you on GB10
 
-**Cap the KV cache.** Left alone, SGLang sized a **744,276-token** pool (36.9 GiB: 22.7 FP8
-attention + 14.2 BF16 mamba state) and left only 10.4 GiB of host memory free once
-torch.compile and graph capture were resident. On unified memory an OOM freezes the whole
-host, not just the process. `MAX_TOTAL=200000` is ample — the longest prompt here is 22.6K
-tokens — and recovers 27 GB at no cost to decode rate. `run-sglang.sh` refuses to launch
-below 8 GiB of headroom.
+**Cap the KV cache.** Left alone, SGLang sized a **744,276-token** pool (36.9 GiB) and
+left only 10.4 GiB of host memory free once torch.compile and graph capture were
+resident. On unified memory an OOM freezes the whole host, not just the process.
+`serve-production.sh` sets `--max-total-tokens 262144` (the checkpoint's full context)
+and refuses to launch below 8 GiB of headroom.
 
-**`--mem-fraction-static` is a share of the whole pool,** and SGLang derives "already used"
-from `total − free`, which on unified memory counts your desktop. Upstream's `0.50` assumes
-an idle Spark; `0.78` is what works here. Free-after is always `(1−frac) × total`, so 0.78
-reliably leaves 26.8 GiB.
+**`--mem-fraction-static` is a share of the whole pool,** and SGLang derives "already
+used" from `total − free`, which on unified memory counts your desktop. Free-after is
+always `(1−frac) × total`, so the guard is exact. Upstream reports a hard reboot at
+`0.95`; `0.90` is the working value.
 
 ## Files
 
@@ -255,8 +288,13 @@ scripts/bench-qwen38.py        throughput / accuracy / vision modes
 scripts/patch_lmhead_nvfp4.py  NVFP4 lm_head -> dense BF16
 scripts/swap_native_head.py    swap in the FP8 checkpoint's native BF16 head instead
 scripts/pardl.py               parallel ranged-GET downloader (HF Xet is unreachable here)
-scripts/sglang/                chat template
+scripts/model-router.py        routes qwen* -> local, everything else -> Anthropic
+scripts/sglang/                chat template (fixes the Claude Code 500)
 scripts/test-chart.png         vision benchmark input
+scripts/gsm8k_test.json        GSM8K test split, vendored (1,319 questions)
+setup.sh                       clone serving stack + build image + fetch weights
+deploy/                        production launcher, systemd units, deployment notes
+clients/                       Claude Code / Codex / Harbor configs + smoke test
 results/                       per-arm logs, curated failures, serve-log provenance
 ```
 

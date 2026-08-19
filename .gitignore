@@ -9,7 +9,10 @@ results/*-serve.log
 # Model checkpoints, drafters, benchmark data, engine caches.
 *.safetensors
 *.index.json
-gsm8k_test.*
 sglang-cache/
 __pycache__/
 *.pyc
+
+# GSM8K test split is vendored at scripts/gsm8k_test.json (338 KB) so the accuracy
+# benchmark runs with no external fetch. Other copies stay ignored.
+/gsm8k_test.*
