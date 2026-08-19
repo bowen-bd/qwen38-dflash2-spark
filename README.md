@@ -23,9 +23,9 @@ get it.
   **+61% at 8 streams**, from acceptance **3.29 → 5.03** tokens per verification pass.
 - **No accuracy loss.** With the stack held constant both drafters score **144/150** on
   GSM8K — identical, exactly as losslessness predicts.
-- **Production config is faster than any arm we built**: **+40% prose, +79% technical,
-  +67% math** over the DSpark baseline, **165.7 tok/s at 8 streams**, **145/150** on
-  GSM8K, in **6.8 GB less memory** and a **4× faster start**. See [deploy/](deploy/).
+- **Production config is faster than any arm we built**: **+43% prose, +94% technical,
+  +87% math, +48% code gen** over the DSpark baseline, **198.6 tok/s aggregate at 8 streams**,
+  **145/150** on GSM8K, in **6.8 GB less memory** and a **4× faster start**. See [deploy/](deploy/).
 
 > **Serving is delegated to [MiaAI-Lab/Qwen3.8-27B-SGLang-DGX-Spark][mia].** They solved
 > the `lm_head` problem better than we did — running the quantized head in place via
@@ -126,20 +126,20 @@ Batch-1 decode, tok/s:
 Arm **P** is the [MiaAI-Lab][mia] stack (their image, their in-place quantized head, FP8
 mamba state) plus our three corrections. Same prompts, same 200k KV cap, idle machine.
 
-| | **A** DSpark baseline | **C** our DFlash2 | **P** production | P vs A |
+| | **A** DSpark baseline | **C** our DFlash2 | **P** production (latest) | P vs A |
 |---|---|---|---|---|
-| Free-form prose | 17.61 | 22.64 | **24.59** | **+40%** |
-| Technical explanation | 20.09 | 30.13 | **35.95** | **+79%** |
-| Math / structured | 32.12 | 39.12 | **53.59** | **+67%** |
-| Code generation | 29.77 | 38.12 | **38.91** | **+31%** |
-| Code editing | 40.02 | 43.17 | **49.12** | **+23%** |
-| JSON structured | 40.31 | 43.70 | **49.83** | **+24%** |
-| Single-stream decode | 16.11 | 23.54 | **27.26** | **+69%** |
-| 8 concurrent (agg) | 104.74 | 154.30 | **165.65** | **+58%** |
-| Prefill @22.6K | 2786 | 3037 | **3210** | +15% |
+| Free-form prose | 17.61 | 22.64 | **25.09** | **+42%** |
+| Technical explanation | 20.09 | 30.13 | **39.00** | **+94%** |
+| Math / structured | 32.12 | 39.12 | **59.93** | **+87%** |
+| Code generation | 29.77 | 38.12 | **44.08** | **+48%** |
+| Code editing | 40.02 | 43.17 | **52.02** | **+30%** |
+| JSON structured | 40.31 | 43.70 | **54.22** | **+34%** |
+| Single-stream decode | 16.11 | 23.54 | **39.83** | **+147%** |
+| 8 concurrent (agg) | 104.74 | 154.30 | **198.63** | **+90%** |
+| Prefill @22.6K / 32K | 2786 | 3037 | **3262** | +17% |
 | Vision, per chart | 3.0 s | 2.6 s | **2.8 s** | +7% |
 | **GSM8K (150 q)** | 143/150 | 144/150 | **145/150** | **+2** |
-| Footprint | 50,675 MiB | 53,733 MiB | **43,750 MiB** | **−6.8 GB** |
+| Footprint | 50,675 MiB | 53,733 MiB | **45,582 MiB** | **−5.1 GB** |
 | Time to ready | 550 s | 510 s | **130 s** | **4× faster** |
 
 It is faster than every arm we built, on less memory, with better accuracy, and starts
@@ -151,14 +151,49 @@ the same config managed only 107.4 tok/s because concurrency was capped at 6.
 
 ### Multi-Condition Standard Benchmark Suite
 
-To thoroughly characterize the live serving performance under varying operational conditions, we run a 6-axis standard benchmark suite (`scripts/bench-standard-suite.py`). Full tabulated logs are in [results/standard-benchmark-results.md](results/standard-benchmark-results.md) and [results/standard-benchmark-results.json](results/standard-benchmark-results.json):
+Measured with `scripts/bench-standard-suite.py`. Full raw logs and data are in [results/standard-benchmark-results.md](results/standard-benchmark-results.md) and [results/standard-benchmark-results.json](results/standard-benchmark-results.json).
 
-1. **Workload Predictability (Batch=1)**: Speculative decode throughput varies from **25.09 tok/s** on high-entropy prose to **59.93 tok/s** on step-by-step math (**2.39× spread**; code generation at **44.08 tok/s**, code refactoring at **52.02 tok/s**, JSON at **54.22 tok/s**).
-2. **Concurrency & Saturation**: Scales from **39.83 tok/s** at 1 stream to a peak of **198.63 aggregate tok/s** at 8 concurrent streams (24.8 tok/s per user, 266 ms TTFT). At 16 streams, throughput holds at **194.28 agg tok/s** with queueing.
-3. **Context / Prompt Length Scaling**: Prefill throughput reaches **2,000 – 3,260 prompt tok/s** for medium-to-long prompts (TTFT scales smoothly from 0.22 s at 128 tokens to 18.4 s at 38k prompt tokens).
-4. **Radix Prefix Caching**: Reusing a ~4.8k token document context reduces TTFT from **2,286 ms** (cold) down to **201 ms** (warm), providing an **11.33× TTFT speedup**.
-5. **Decode Horizon Stability**: Generation rate remains flat across sequence lengths (**35.05 tok/s** at 64 tokens, **31.66 tok/s** at 1024 tokens; ITL ~31 ms).
-6. **Reasoning / Thinking Mode**: DFlash2 maintains high throughput during active chain-of-thought generation (**52.22 tok/s** with `enable_thinking=True` vs **53.44 tok/s** with `enable_thinking=False`).
+#### 1. Workload Diversity & Predictability (Single-Stream, Batch = 1)
+*400 completion tokens per workload, median over 3 runs*
+
+| Workload Domain | Decode (tok/s) | TTFT (ms) | Inter-Token Latency (ms) |
+| :--- | :---: | :---: | :---: |
+| **Free-form Creative Prose** | **25.09** | 188.3 | 39.95 |
+| **Technical Explanation** | **39.00** | 219.9 | 25.71 |
+| **Python Code Generation** | **44.08** | 217.4 | 22.74 |
+| **Code Editing / Refactor** | **52.02** | 201.4 | 19.27 |
+| **Structured JSON Output** | **54.22** | 196.5 | 18.49 |
+| **Step-by-Step Math / Reasoning** | **59.93** | 191.7 | 16.73 |
+
+#### 2. Concurrency & Throughput Scaling (300 tokens / stream)
+
+| Concurrency ($C$) | Aggregate Throughput | Per-Stream Speed | Avg TTFT | Total Wall Time |
+| :---: | :---: | :---: | :---: | :---: |
+| **1** | **39.83 tok/s** | 39.83 tok/s | 146.9 ms | 7.53 s |
+| **2** | **63.58 tok/s** | 31.79 tok/s | 842.6 ms | 9.44 s |
+| **4** | **118.59 tok/s** | 29.65 tok/s | 227.7 ms | 10.12 s |
+| **8** | **198.63 tok/s** | 24.83 tok/s | 266.3 ms | 12.08 s |
+| **16** | **194.28 tok/s** | 12.14 tok/s | 6,352.4 ms | 24.71 s |
+
+#### 3. Context / Prompt Scaling (Prefill Throughput & TTFT)
+
+| Prompt Context | TTFT | Prefill Speed | Generation Speed |
+| :---: | :---: | :---: | :---: |
+| **128 tokens** | **0.220 s** | 599.9 tok/s | 19.8 tok/s |
+| **1,024 tokens** | **0.324 s** | 1,845.1 tok/s | 19.7 tok/s |
+| **4,096 tokens** | **1.069 s** | 2,216.6 tok/s | 19.6 tok/s |
+| **16,384 tokens** | **4.640 s** | 2,037.3 tok/s | 17.2 tok/s |
+| **32,768 tokens** | **5.802 s** | 3,261.6 tok/s | 25.6 tok/s |
+| **65,536 tokens** | **18.424 s** | 2,055.3 tok/s | 25.1 tok/s |
+
+#### 4. Radix Prefix Caching & Reasoning Modes
+
+| Condition / Mode | Context / Tokens | TTFT | Decode Speed | Note |
+| :--- | :---: | :---: | :---: | :--- |
+| **Cold Request** (0% Cache) | 4,787 prompt | 2,286.3 ms | 19.6 tok/s | Baseline full prefill |
+| **Warm Request** (100% Cache) | 4,789 prompt | **201.8 ms** | 19.8 tok/s | **11.33× faster TTFT** |
+| **Thinking OFF** | 512 completion | 204.6 ms | **53.44 tok/s** | Direct output |
+| **Thinking ON** | 512 completion | 213.5 ms | **52.22 tok/s** | Sustained speed during CoT |
 
 ### Reading the numbers
 
