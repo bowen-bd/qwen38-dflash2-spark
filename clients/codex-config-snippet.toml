@@ -1,0 +1,29 @@
+# Standalone Codex CLI -> local Qwen3.8-27B.
+#
+# Append to ~/.codex/config.toml. This adds a provider WITHOUT changing your
+# default model, so `codex` keeps using gpt-5.6-sol and you opt in per run:
+#
+#   codex --profile qwen-local exec "..."
+#
+# SGLang serves /v1/responses natively (wire_api = "responses") and returns
+# reasoning items that already carry ids, so the Codex-side id-minting that
+# anthropic-shim.py did for vLLM is unnecessary here.
+#
+# Note: Harbor's containerised codex does NOT read this file -- it writes its own
+# config.toml inside the container from OPENAI_BASE_URL. Use
+# clients/harbor-qwen-local.json for the solver agent instead.
+
+[model_providers.qwen-local]
+name = "Qwen3.8-27B (local SGLang, DFlash2)"
+base_url = "http://127.0.0.1:8888/v1"
+wire_api = "responses"
+# SGLang does not check the key, but codex requires one to be present.
+env_key = "QWEN_LOCAL_API_KEY"
+
+[profiles.qwen-local]
+model = "qwen3.8-27b-sglang"
+model_provider = "qwen-local"
+# The checkpoint defaults to reasoning_effort xhigh and will burn tens of
+# thousands of tokens on trivial prompts. Only low/medium/xhigh are accepted --
+# "none" is rejected.
+model_reasoning_effort = "low"

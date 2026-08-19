@@ -15,14 +15,26 @@ get it.
 ## TL;DR
 
 - **DFlash2 does not run on an NVFP4 target at all.** Its candidate selector requires a
-  dense FP16/BF16/FP32 `lm_head`. Fixed here by dequantizing that one tensor.
-- **A second bug** kills it whenever `max-running-requests > cuda-graph-max-bs` — the
-  combination upstream's own `run.sh` ships.
-- With both worked around, DFlash2 is **+41% to +54% faster than DSpark across every
-  workload** on an identical stack, and **+61% at 8 concurrent streams**, from acceptance
-  length **3.29 → 5.03** tokens per verification pass.
-- **No accuracy loss:** 144/150 on GSM8K for both drafters, identical.
-- **Costs +3.0 GB** of memory, ~1.0 GB of which is the larger drafter.
+  dense `lm_head`; an NVFP4 head is packed `U8` and it raises on the first decode.
+- **A second bug** kills it whenever `max-running-requests > cuda-graph-max-bs`.
+- **A third**, found while productionising: on the DFlash2 path the GDN state pool needs
+  **5 slots per request, not 4**, or concurrency is silently clamped (8 → 6).
+- Isolated on one stack, DFlash2 beats DSpark **+41% to +54% on every workload** and
+  **+61% at 8 streams**, from acceptance **3.29 → 5.03** tokens per verification pass.
+- **No accuracy loss.** With the stack held constant both drafters score **144/150** on
+  GSM8K — identical, exactly as losslessness predicts.
+- **Production config is faster than any arm we built**: **+40% prose, +79% technical,
+  +67% math** over the DSpark baseline, **165.7 tok/s at 8 streams**, **145/150** on
+  GSM8K, in **6.8 GB less memory** and a **4× faster start**. See [deploy/](deploy/).
+
+> **Serving is delegated to [MiaAI-Lab/Qwen3.8-27B-SGLang-DGX-Spark][mia].** They solved
+> the `lm_head` problem better than we did — running the quantized head in place via
+> `quant_method.apply` instead of dequantizing 2.5 GB — and their GB10 tuning (FP8 KV,
+> GDN pool sizing, mamba memory ratio, CPU pinning) beats ours. This repo is the
+> measurement and integration layer: the controlled experiment, the accuracy data, the
+> NVFP4 decode validation, and the Claude Code / Codex / Harbor wiring.
+
+[mia]: https://github.com/MiaAI-Lab/Qwen3.8-27B-SGLang-DGX-Spark
 
 ## The three arms
 
@@ -65,6 +77,34 @@ Batch-1 decode, tok/s:
 | **Mean acceptance length** | **3.32** | **3.29** | **5.03** | **+53%** | +51% |
 | **GSM8K (150 q)** | 143/150 | **144/150** | **144/150** | **0** | +1 |
 | Footprint, steady state | 50,675 MiB | 52,735 MiB | 53,733 MiB | +998 MiB | +3,058 MiB |
+
+### Production configuration — what you should actually run
+
+Arm **P** is the [MiaAI-Lab][mia] stack (their image, their in-place quantized head, FP8
+mamba state) plus our three corrections. Same prompts, same 200k KV cap, idle machine.
+
+| | **A** DSpark baseline | **C** our DFlash2 | **P** production | P vs A |
+|---|---|---|---|---|
+| Free-form prose | 17.61 | 22.64 | **24.59** | **+40%** |
+| Technical explanation | 20.09 | 30.13 | **35.95** | **+79%** |
+| Math / structured | 32.12 | 39.12 | **53.59** | **+67%** |
+| Code generation | 29.77 | 38.12 | **38.91** | **+31%** |
+| Code editing | 40.02 | 43.17 | **49.12** | **+23%** |
+| JSON structured | 40.31 | 43.70 | **49.83** | **+24%** |
+| Single-stream decode | 16.11 | 23.54 | **27.26** | **+69%** |
+| 8 concurrent (agg) | 104.74 | 154.30 | **165.65** | **+58%** |
+| Prefill @22.6K | 2786 | 3037 | **3210** | +15% |
+| Vision, per chart | 3.0 s | 2.6 s | **2.8 s** | +7% |
+| **GSM8K (150 q)** | 143/150 | 144/150 | **145/150** | **+2** |
+| Footprint | 50,675 MiB | 53,733 MiB | **43,750 MiB** | **−6.8 GB** |
+| Time to ready | 550 s | 510 s | **130 s** | **4× faster** |
+
+It is faster than every arm we built, on less memory, with better accuracy, and starts
+four times quicker. Three reasons, none of them the drafter: the head is never
+dequantized (−2.5 GB and −1.9 GB of streamed weights per pass), the mamba state is FP8
+rather than BF16 (0.95+0.95 GB vs 1.91+1.91), and torch.compile is off with no
+measurable cost. The 8-stream figure is **after** fixing the GDN slot clamp — before it,
+the same config managed only 107.4 tok/s because concurrency was capped at 6.
 
 ### Reading the numbers
 

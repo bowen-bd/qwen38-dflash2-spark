@@ -1,0 +1,23 @@
+[Unit]
+Description=Qwen3.8-27B NVFP4 + DFlash2 (SGLang) on DGX Spark GB10
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# serve-production.sh execs start-dflash.sh, which runs the container with
+# `docker run -d` and then tails it, so the unit stays in the foreground.
+ExecStart=%h/llm/qwen38-dflash2-spark/deploy/serve-production.sh
+ExecStop=%h/llm/miaai/stop.sh
+Restart=on-failure
+RestartSec=30
+# The launcher refuses to start when free memory is too low, and a GPU OOM on
+# unified memory can wedge the host. Cap restarts so a genuinely unhealthy box
+# is not hammered into a reboot loop.
+StartLimitIntervalSec=600
+StartLimitBurst=3
+Environment=CONCURRENCY=8
+Environment=MAX_TOTAL=200000
+
+[Install]
+WantedBy=default.target

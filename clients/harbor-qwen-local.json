@@ -1,0 +1,41 @@
+{
+  "_comment": [
+    "Harbor job template pointing the codex solver agent at the local Qwen server.",
+    "Copy into terminal-bench-science/scripts/atomisticskills/configs/ and edit `tasks`.",
+    "",
+    "How this reaches the server: Harbor runs the agent in a container, so 127.0.0.1 is",
+    "the container, not the host. 172.17.0.1 is the docker0 bridge gateway = the host.",
+    "SGLang binds 0.0.0.0:8888, so the container can reach it there.",
+    "",
+    "Why these exact keys: harbor/agents/installed/codex.py reads OPENAI_BASE_URL and",
+    "writes `openai_base_url` into the container's CODEX_HOME/config.toml, because codex",
+    "0.118.0 only honors it from config.toml and ignores the env var. model_name is split",
+    "on '/' and the last segment is passed as `codex exec --model`, so the part after",
+    "'openai/' must equal --served-model-name.",
+    "",
+    "IMPORTANT: export OPENAI_API_KEY (any non-empty value) before run_harbor_job.sh.",
+    "That script sets CODEX_FORCE_AUTH_JSON=1 when OPENAI_API_KEY is unset, which would",
+    "upload your real ~/.codex/auth.json and try to authenticate against api.openai.com",
+    "instead of the local server.",
+    "",
+    "  OPENAI_API_KEY=local scripts/atomisticskills/run_harbor_job.sh <this file>"
+  ],
+  "job_name": "qwen38-local-solver",
+  "n_attempts": 1,
+  "n_concurrent_trials": 1,
+  "agents": [
+    {
+      "name": "codex",
+      "model_name": "openai/qwen3.8-27b-sglang",
+      "env": {
+        "OPENAI_BASE_URL": "http://172.17.0.1:8888/v1",
+        "OPENAI_API_KEY": "local"
+      }
+    }
+  ],
+  "tasks": [
+    {
+      "path": "tasks/atomisticskills/materials-science/convex-hull-stability"
+    }
+  ]
+}

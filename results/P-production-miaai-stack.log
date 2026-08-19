@@ -1,0 +1,86 @@
+
+===== ARM: mia-dflash2 =====
+2026-08-19 15:26:11
+healthy after 130s
+--- footprint: python3, 218 MiB sglang::scheduler, 41312 MiB 
+--- MemAvailable=43.2 GiB used=78.5 GiB
+[2026-08-19 19:27:20] Load weight end. elapsed=119.53 s, type=Qwen3_5ForConditionalGeneration, quant=modelopt_mixed, quant_algo=MIXED_PRECISION, avail mem=65.39 GB, mem usage=20.03 GB.
+[2026-08-19 19:27:45] Load weight end. elapsed=23.64 s, type=DFlash2DraftModel, avail mem=61.30 GB, mem usage=4.04 GB.
+[2026-08-19 19:27:46] KV Cache is allocated. dtype: torch.float8_e4m3fn, #tokens: 200000, K size: 3.05 GB, V size: 3.05 GB
+[2026-08-19 19:27:46] KV Cache is allocated. dtype: torch.float8_e4m3fn, #tokens: 200000, K size: 0.95 GB, V size: 0.95 GB
+[2026-08-19 19:28:06] max_total_num_tokens=200000, chunked_prefill_size=8192, max_prefill_tokens=16384, max_running_requests=6, context_len=262144, available_gpu_mem=43.96 GB
+
+--- workloads (batch-1 decode, thinking off)
+model=qwen3.8-27b-sglang  batch-1 decode, thinking off, temperature 0
+
+workload                            tok/s   tokens
+----------------------------------------------------
+free-form prose                     24.59      400
+technical explanation               35.95      400
+math / structured reasoning         53.59      400
+code generation                     38.91      400
+code editing (repeat + modify)      49.12      400
+JSON structured output              49.83      400
+----------------------------------------------------
+spread: 24.6 tok/s (free-form prose) -> 53.6 tok/s (math / structured reasoning)
+
+--- concurrency + prefill
+model=qwen3.8-27b-sglang  endpoint=http://127.0.0.1:8888/v1
+
+== warmup ==
+
+== single-stream decode (short prompt, 256 new tokens) ==
+  run 1: ttft=    210 ms   256 tok  decode= 24.98 tok/s
+  run 2: ttft=    207 ms   226 tok  decode= 24.71 tok/s
+  run 3: ttft=    206 ms   210 tok  decode= 24.62 tok/s
+  -> median single-stream decode: 24.71 tok/s
+
+== prefill (TTFT vs prompt length) ==
+  ~  1423 tok prompt: ttft=  0.55 s  ->     2583 tok/s prefill
+  ~  5660 tok prompt: ttft=  1.78 s  ->     3181 tok/s prefill
+  ~ 22610 tok prompt: ttft=  7.04 s  ->     3210 tok/s prefill
+
+== concurrent aggregate decode (256 new tokens each) ==
+  conc=  1:   256 tok in   8.93 s ->   28.68 tok/s aggregate (28.68 tok/s per stream)
+  conc=  2:   512 tok in   8.80 s ->   58.20 tok/s aggregate (29.10 tok/s per stream)
+  conc=  4:  1024 tok in  10.34 s ->   99.04 tok/s aggregate (24.76 tok/s per stream)
+  conc=  8:  2048 tok in  19.06 s ->  107.44 tok/s aggregate (13.43 tok/s per stream)
+
+--- vision (1 chart)
+Based on the provided bar chart titled "Qwen3.8-27B on DGX Spark GB10", here are the values for each bar:
+
+- **Q4_K_XL**: 11.6 tok/s, 17.9 GB
+- **NVFP4**: 21.4 tok/s, 22.5 GB
+- **FP8**: 8.2 tok/s, 30.9 GB
+- **BF16**: 3.1 tok/s, 54.7 GB
+
+[2.8s, 117 completion tokens]
+
+--- accuracy GSM8K 150 (identical settings to the DSpark baseline)
+    10/150  running acc=100.0%
+    20/150  running acc=100.0%
+    30/150  running acc=100.0%
+    40/150  running acc=100.0%
+    50/150  running acc=100.0%
+    60/150  running acc=98.3%
+    70/150  running acc=97.1%
+    80/150  running acc=97.5%
+    90/150  running acc=97.8%
+    100/150  running acc=97.0%
+    110/150  running acc=97.3%
+    120/150  running acc=97.5%
+    130/150  running acc=96.9%
+    140/150  running acc=97.1%
+    150/150  running acc=96.7%
+
+  GSM8K 145/150 = 96.7%   effort=none   errors=0
+  48804 completion tokens, 281s wall, 173.9 tok/s aggregate, 325 tok/question
+  first misses (gold -> got): [('104', 2.0), ('25000', 50000.0), ('36', 36.36), ('95200', 1.3), ('70', 5.0)]
+
+--- acceptance length from server log (spec decoding efficiency)
+not logged
+
+--- footprint after: python3, 238 MiB sglang::scheduler, 43750 MiB 
+--- MemAvailable=40.6 GiB used=81.0 GiB
+===== ARM mia-dflash2 DONE =====
+2026-08-19 15:37:41
