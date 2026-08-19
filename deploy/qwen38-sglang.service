@@ -5,19 +5,26 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-# serve-production.sh execs start-dflash.sh, which runs the container with
-# `docker run -d` and then tails it, so the unit stays in the foreground.
+# serve-production.sh starts the container and then blocks on `docker wait`
+# (WAIT_FOR_CONTAINER=1). Without that it returns as soon as the server is ready,
+# systemd reads the exit as the service stopping, and ExecStop kills the container.
 ExecStart=%h/llm/qwen38-dflash2-spark/deploy/serve-production.sh
 ExecStop=%h/llm/miaai/stop.sh
-Restart=on-failure
+# docker wait exits 0 carrying the container status, so on-failure would not fire.
+Restart=always
 RestartSec=30
 # The launcher refuses to start when free memory is too low, and a GPU OOM on
 # unified memory can wedge the host. Cap restarts so a genuinely unhealthy box
 # is not hammered into a reboot loop.
 StartLimitIntervalSec=600
 StartLimitBurst=3
+Environment=WAIT_FOR_CONTAINER=1
 Environment=CONCURRENCY=8
-Environment=MAX_TOTAL=200000
+# 262144 = the checkpoint's full context (context_len). At ~40 KB/token measured
+# (FP8 attention 3.05+3.05 GB and FP8 mamba 0.95+0.95 GB per 200k) this is ~10.5 GB
+# of KV, vs 8.0 GB at 200k. The pool is shared across concurrent requests, so this
+# is the ceiling for a single request, not per request.
+Environment=MAX_TOTAL=262144
 
 [Install]
 WantedBy=default.target

@@ -34,6 +34,49 @@ for f in ~/llm/dflash2-drafter/*; do ln -f "$f" "$D/snapshots/$REV/$(basename $f
 `incoai/Qwen3.8-27B-DFlash2` and `z-lab/…@50307d4` are the same weights — verified
 identical `model.safetensors` size (3,848,817,896 B) and byte-identical `config.json`.
 
+## Context length
+
+`context_len=262144` (the checkpoint's full window; `/v1/models` reports
+`max_model_len: 262144`). The usable ceiling is the KV pool, `--max-total-tokens`,
+which the service now sets to the same 262,144 so nothing is left on the table:
+
+```
+KV Cache is allocated. #tokens: 262144, K 4.00 GB, V 4.00 GB   (FP8 attention)
+KV Cache is allocated. #tokens: 262144, K 1.25 GB, V 1.25 GB   (FP8 mamba state)
+```
+
+That is **10.5 GB of KV at ~40 KB/token**, vs 8.0 GB at 200k. The pool is **shared
+across concurrent requests**, so 262,144 is the ceiling for a single request, not a
+per-request budget -- eight simultaneous long sessions divide it. Prefill is chunked at
+8192, so long prompts stream in rather than needing one huge allocation.
+
+Beyond 262k the checkpoint supports ~1M via YaRN (`YARN=1 CONTEXT_LENGTH=...` in
+MiaAI's `start.sh`), but a 1M-token sequence alone is ~40 GB of KV.
+
+## Reboot
+
+`deploy/qwen38-sglang.service` and `deploy/qwen-router.service` are user units, so two
+things are required beyond `systemctl --user enable`:
+
+```bash
+loginctl enable-linger bdeng          # user services start at boot WITHOUT a login
+systemctl --user enable --now qwen38-sglang qwen-router
+```
+
+Without linger, nothing starts until you open a session. Also retire the stale
+vLLM-era unit if present -- it is enabled and fails on every boot:
+
+```bash
+systemctl --user disable --now qwen-vllm.service
+```
+
+**Unit lifecycle gotcha.** `start.sh` launches the container with `docker run -d` and
+returns once the server answers. Under `Type=simple` systemd reads that exit as the
+service stopping and immediately fires `ExecStop`, killing the container it just
+started. `serve-production.sh` therefore blocks on `docker wait` when
+`WAIT_FOR_CONTAINER=1`, and the unit uses `Restart=always` because `docker wait` exits 0
+carrying the container's status (so `on-failure` would never fire).
+
 ## Run
 
 ```bash

@@ -69,4 +69,13 @@ export DF_TARGET="${DF_TARGET:-nvfp4}"
 export DF_EXTRA="--model-path ${MODEL_PATH} --max-total-tokens ${MAX_TOTAL} --max-mamba-cache-size ${MAMBA_SLOTS} --chat-template ${CHAT_TEMPLATE} ${DF_EXTRA:-}"
 
 echo "delegating to ${MIAAI_DIR}/start-dflash.sh"
-exec ./start-dflash.sh
+./start-dflash.sh
+
+# start.sh launches the container with `docker run -d` and returns once the server
+# answers ("shell is now free"). Under systemd Type=simple that exit looks like the
+# service dying, so systemd fires ExecStop and kills the container it just started.
+# Blocking on the container keeps the unit alive for as long as the server runs, and
+# lets Restart= react when the container actually dies.
+if [ -n "${WAIT_FOR_CONTAINER:-}" ]; then
+  exec docker wait "${CONTAINER_NAME:-qwen3.8-27b-sglang}"
+fi
