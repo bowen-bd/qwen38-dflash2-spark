@@ -6,9 +6,9 @@ CUDA 13.0), serving `RadixArk/Qwen3.8-27B-NVFP4` under SGLang.
 DFlash2 landed upstream in SGLang on **2026-08-19** ([PR #35371]). Its published
 numbers are a **BF16 target on an H200** — Hopper, which has no FP4 tensor cores — so
 the NVFP4 path had never been exercised. This repo is what happened when we ran it on
-one: **two blocking bugs**, a fix for the more serious one, and a three-arm benchmark
-that separates the drafter's contribution from the cost of the stack change needed to
-get it.
+one: **three blocking bugs**, a controlled three-arm benchmark that separates the
+drafter's contribution from the cost of the stack change it requires, and the accuracy
+measurement nobody else published.
 
 [PR #35371]: https://github.com/sgl-project/sglang/pull/35371
 
@@ -25,7 +25,9 @@ get it.
   GSM8K — identical, exactly as losslessness predicts.
 - **Production config is faster than any arm we built**: **+43% prose, +94% technical,
   +87% math, +48% code gen** over the DSpark baseline, **198.6 tok/s aggregate at 8 streams**,
-  **145/150** on GSM8K, in **6.8 GB less memory** and a **4× faster start**. See [deploy/](deploy/).
+  **145/150** on GSM8K, in **6.8 GB less memory** and a **4× faster start**. Full
+  characterisation in the [standard suite](#multi-condition-standard-benchmark-suite);
+  deployment in [deploy/](deploy/).
 
 > **Serving is delegated to [MiaAI-Lab/Qwen3.8-27B-SGLang-DGX-Spark][mia].** They solved
 > the `lm_head` problem better than we did — running the quantized head in place via
@@ -151,7 +153,15 @@ the same config managed only 107.4 tok/s because concurrency was capped at 6.
 
 ### Multi-Condition Standard Benchmark Suite
 
-Measured with `scripts/bench-standard-suite.py`. Full raw logs and data are in [results/standard-benchmark-results.md](results/standard-benchmark-results.md) and [results/standard-benchmark-results.json](results/standard-benchmark-results.json).
+Measured with `scripts/bench-standard-suite.py`. Full raw logs and data are in
+[results/standard-benchmark-results.md](results/standard-benchmark-results.md) and
+[results/standard-benchmark-results.json](results/standard-benchmark-results.json).
+
+**This supersedes the A/B/C/P tables above for "how fast is it".** Those answer a
+different question — a *controlled* comparison isolating the drafter from the stack
+change it requires, run at a 200k KV cap on an earlier config. This suite exercises the
+shipping configuration (262k KV pool, 8 concurrent slots) across more conditions, which
+is why every number here is higher.
 
 #### 1. Workload Diversity & Predictability (Single-Stream, Batch = 1)
 *400 completion tokens per workload, median over 3 runs*
@@ -174,6 +184,12 @@ Measured with `scripts/bench-standard-suite.py`. Full raw logs and data are in [
 | **4** | **118.59 tok/s** | 29.65 tok/s | 227.7 ms | 10.12 s |
 | **8** | **198.63 tok/s** | 24.83 tok/s | 266.3 ms | 12.08 s |
 | **16** | **194.28 tok/s** | 12.14 tok/s | 6,352.4 ms | 24.71 s |
+
+**Throughput saturates at 8, and 16 is worse than useless.** Aggregate goes flat
+(198.6 → 194.3) while average TTFT degrades **24×** (266 ms → 6,352 ms), because
+`--max-running-requests 8` admits eight and the rest queue. To go beyond eight you must
+raise *both* that and the GDN pool (`concurrency × 5` slots) — raising one alone silently
+clamps you back.
 
 #### 3. Context / Prompt Scaling (Prefill Throughput & TTFT)
 
@@ -242,7 +258,15 @@ rejected. **There is currently no working quantized-head path in either engine.*
 
 [PR #52883]: https://github.com/vllm-project/vllm/pull/52883
 
-Three ways to give it a dense head:
+**The fix that actually ships is none of these.** [MiaAI-Lab][mia]'s
+`patch/dflash2_nvfp4_head.patch` calls `quant_method.apply(lm_head, hidden, None)` and
+runs the *quantized* head in place, so the selector never needs a dense matrix: no
+dequantization, no extra 2.5 GB, no fidelity question. Their build script notes that a
+dequant-once approach allocated 2.5–5 GB at draft-graph capture and hard-rebooted the
+box. Prefer it on SGLang.
+
+The dense-head routes below remain relevant for **vLLM**, where the quantized-head gap is
+still open, and they are how the NVFP4 decode was validated:
 
 | approach | fidelity | memory | notes |
 |---|---|---|---|
@@ -287,6 +311,37 @@ just the drafter, it would quietly degrade quality rather than crash.
    `stage_sampling_params()` indexes them with the live batch size:
    `RuntimeError: The size of tensor a (4) must match the size of tensor b (8)`.
    Upstream's own `run.sh` ships `4` with `8`; harmless for DSpark/MTP, fatal here.
+3. **The GDN state pool needs 5 slots per request on the DFlash2 path, not 4.** The
+   `concurrency × 4` formula is right for `extra_buffer_lazy` + EAGLE/MTP, but
+   `start-dflash.sh` switches to `extra_buffer` with block-8 drafting. A request for 8
+   concurrent silently becomes 6: *"max_running_requests is capped to 6 by the mamba
+   state cache (max_mamba_cache_size=32, 5 state slots per request)"*. Worth **+54% at 8
+   streams** (107.4 → 165.7 tok/s) — a one-line change to `MAMBA_SLOTS_PER_REQ`.
+4. **No `--chat-template` means every Claude Code request 500s.** The stock template
+   rejects the `reasoning_effort: "max"` that Claude Code sends:
+   `ValueError: Unexpected reasoning effort max`. `scripts/sglang/chat-template-sglang.jinja`
+   maps `max`/`high` → `xhigh` and `minimal` → `low`, and renders mid-conversation system
+   turns as `<system-reminder>` blocks in place.
+
+## Operating notes
+
+**The KV pool is shared, not partitioned.** `context_len` caps one request;
+`--max-total-tokens` sizes the pool everyone draws from. Four concurrent agents do *not*
+get 65k each — one can use 200k while the others stay small. When the pool cannot fit
+everything, the scheduler queues (`fcfs`) and retracts longest-first
+(`retraction_policy='length'`) rather than failing; you lose throughput, not correctness.
+Radix prefix caching is on, so agents sharing a system prompt store it **once** — the
+common case for subagents. Useful lever: **the pool may exceed `context_len`**. Setting
+`MAX_TOTAL=524288` gives four agents ~131k each concurrently while still capping any
+single request at 262k, for ~10.5 GB more KV at the measured ~40 KB/token.
+
+**Surviving a reboot takes three things**, not just `systemctl enable`: `loginctl
+enable-linger` (user units do not start until someone logs in), the unit installed, and
+any stale predecessor disabled. There is also a lifecycle trap — `start.sh` detaches once
+the server answers, so under `Type=simple` systemd reads that exit as the service
+stopping and fires `ExecStop`, killing the container it just started.
+`serve-production.sh` therefore blocks on `docker wait`, and the unit uses
+`Restart=always` because `docker wait` exits 0 carrying the container status.
 
 ## Reproducing
 
@@ -347,15 +402,23 @@ results/                       per-arm logs, curated failures, serve-log provena
 
 ## Caveats
 
-- **n=150 on GSM8K** bounds accuracy at roughly ±1.8 pt. It does not rule out a sub-2-point
-  regression; the full 1,319-question set would tighten that to ±0.6 pt.
+- **Accuracy is bounded at roughly ±1.8 pt**, not tighter. Every GSM8K figure here is
+  n=150, so 143 vs 144 vs 145 are statistically indistinguishable and the honest claim is
+  "no detectable loss". The full 1,319-question split is vendored at
+  `scripts/gsm8k_test.json` and would tighten this to ±0.6 pt; nobody has run it yet.
+- **Accuracy was never measured on the shipping stack's exact head.** 145/150 came from the
+  native-BF16-head arm. Production runs the quantized head in place, which should be
+  equivalent-or-better, but that is an inference, not a measurement.
 - **Acceptance lengths** are means over each run's decode batches, and the arms cover
   slightly different phase mixes, so treat them as approximate. A and B are directly
   comparable (169 vs 168 batches on the same suite).
-- **Arm A's footprint** was sampled after vision but before its GSM8K run; B and C were
-  sampled after GSM8K.
+- **Arm A's footprint** was sampled after vision but before its GSM8K run; B and C after.
+- **The two result sets are not interchangeable.** A/B/C/P used a 200k KV cap and the
+  upstream-tree overlay; the standard suite uses the shipping 262k configuration. Compare
+  within a set, not across.
 - **vLLM is not benchmarked here.** Its DFlash2 PR is still open, and its reviewers flagged
-  the same quantized-head gap.
-- The upstream-tree overlay is a **measurement vehicle, not a deployment**. For production,
-  wait for the fork to rebase onto post-2026-08-19 upstream, which should keep the drafter
-  gain and drop most of the stack tax.
+  the same quantized-head gap that blocks NVFP4.
+- **The Harbor solver path is verified at the protocol and network layers only** — no real
+  trial has executed against the local model end to end.
+- **Reboot survival is verified by construction, not by rebooting.** Linger, units, and the
+  `docker wait` lifecycle were each checked; the machine has not actually been restarted.
