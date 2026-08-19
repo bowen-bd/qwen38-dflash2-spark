@@ -174,7 +174,44 @@ Two alternatives if the custom entry is not enough:
 If `availableModels` is set anywhere in your settings, the custom ID must be added to
 that allowlist too, or it gets filtered out of the picker.
 
-Project scope is the safer default — it merges with your global settings rather than
+**Making it global.** Merge the `env` block into `~/.claude/settings.json` so the entry
+appears in every folder. Merge, do not overwrite -- that file also holds `permissions`,
+`model`, `effortLevel`, and `theme`:
+
+```bash
+cp ~/.claude/settings.json ~/.claude/settings.json.bak-preqwen
+python3 - <<'EOF'
+import json
+p='/home/bdeng/.claude/settings.json'
+d=json.load(open(p))
+d.setdefault('env',{}).update({
+  "ANTHROPIC_BASE_URL": "http://127.0.0.1:8787",
+  "ANTHROPIC_CUSTOM_MODEL_OPTION": "qwen3.8-27b-sglang",
+  "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME": "Qwen3.8-27B (local)",
+  "ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION": "NVFP4 + DFlash2 on this DGX Spark",
+})
+json.dump(d, open(p,'w'), indent=2)
+EOF
+```
+
+The existing top-level `"model"` still decides the default, so this *adds* the local
+model as an option rather than switching to it. Set `"model": "qwen3.8-27b-sglang"` only
+if you want it as the default everywhere.
+
+Verified from a directory with no project settings: `qwen3.8-27b-sglang -> local [200]`
+and `claude-haiku-4-5-20251001 -> anthropic [200]`, i.e. both halves work and the
+claude.ai login still reaches Anthropic.
+
+**This makes the router a hard dependency for all Claude Code usage**, so run it as a
+service and keep the backup for rollback:
+
+```bash
+cp deploy/qwen-router.service ~/.config/systemd/user/
+systemctl --user daemon-reload && systemctl --user enable --now qwen-router
+# rollback:  cp ~/.claude/settings.json.bak-preqwen ~/.claude/settings.json
+```
+
+Project scope is the more conservative alternative — it merges with your global settings rather than
 replacing them, and leaves Claude Code in other folders untouched. It only applies to
 that workspace, so copy `clients/claude-settings-project.json` into
 `~/.claude/settings.json` (merging with the existing `permissions` block) if you want
