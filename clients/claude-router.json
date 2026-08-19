@@ -1,0 +1,28 @@
+{
+  "_comment": [
+    "Claude Code with BOTH local Qwen and the real Anthropic models available in one",
+    "session. Use this instead of claude-qwen.json when you want to switch:",
+    "",
+    "  ROUTER_PASSTHROUGH=1 python3 model-router.py 8787 http://127.0.0.1:8888 https://api.anthropic.com &",
+    "  claude --settings /path/to/clients/claude-router.json",
+    "",
+    "Claude Code takes a single ANTHROPIC_BASE_URL for the whole session, so the only",
+    "way to keep both is to route by model name: anything containing 'qwen' goes to the",
+    "local server, everything else is forwarded to api.anthropic.com with its headers",
+    "untouched. Switch with /model at any time.",
+    "",
+    "ANTHROPIC_AUTH_TOKEN is deliberately NOT set here. The router forwards auth headers",
+    "verbatim, so your existing claude.ai login keeps working for the Anthropic models.",
+    "Setting a dummy token (as claude-qwen.json does) would break that half.",
+    "",
+    "ROUTER_PASSTHROUGH=1 matters: the router's two request fixups exist for vLLM, and",
+    "hoist_system is actively harmful against SGLang -- our chat template renders",
+    "mid-conversation system turns as <system-reminder> blocks in place, and hoisting",
+    "would move them to the top and lose their position."
+  ],
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://127.0.0.1:8787",
+    "ANTHROPIC_MODEL": "qwen3.8-27b-sglang",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
+  }
+}

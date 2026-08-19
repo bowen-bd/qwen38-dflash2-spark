@@ -81,9 +81,42 @@ reasoning items that already carry ids. `clients/smoke-test.sh` asserts all of i
 
 | client | config | note |
 |---|---|---|
-| Claude Code | `clients/claude-qwen.json` | `claude --settings …` keeps your global Anthropic config intact |
+| Claude Code, Qwen only | `clients/claude-qwen.json` | straight at `:8888` |
+| Claude Code, **both models** | `clients/claude-router.json` | via `scripts/model-router.py`; switch with `/model` |
 | Codex CLI | `clients/codex-config-snippet.toml` | adds a `qwen-local` profile; default model unchanged |
 | Harbor solver | `clients/harbor-qwen-local.json` | `OPENAI_BASE_URL=http://172.17.0.1:8888/v1` (docker0 gateway) |
+
+### Selecting the model
+
+**Claude Code.** One `ANTHROPIC_BASE_URL` covers a whole session, so keeping both the
+local model and the real Anthropic models means routing by model name:
+
+```bash
+ROUTER_PASSTHROUGH=1 python3 scripts/model-router.py 8787 http://127.0.0.1:8888 https://api.anthropic.com &
+claude --settings clients/claude-router.json      # /model switches between them
+```
+
+Anything containing `qwen` goes local, everything else is forwarded to Anthropic with
+its headers untouched — so your existing claude.ai login keeps working. Do **not** set
+`ANTHROPIC_AUTH_TOKEN` in that profile; a dummy token breaks the Anthropic half.
+`ROUTER_PASSTHROUGH=1` disables the router's vLLM-era request fixups, one of which
+(`hoist_system`) would otherwise move Claude Code's mid-conversation system turns to the
+top and lose the positioning our chat template preserves.
+
+**Codex.** `clients/codex-config-snippet.toml` appends a provider and profile to
+`~/.codex/config.toml`, leaving your default `gpt-5.6-sol` alone:
+
+```bash
+codex --profile qwen-local exec "..."
+```
+
+**Harbor / terminal-bench-science.** Copy `clients/harbor-qwen-local.json` into
+`scripts/atomisticskills/configs/` and select it as the job config:
+
+```bash
+OPENAI_API_KEY=local scripts/atomisticskills/run_harbor_job.sh \
+  scripts/atomisticskills/configs/qwen38-local.json
+```
 
 Two traps worth knowing:
 
