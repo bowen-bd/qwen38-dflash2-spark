@@ -149,6 +149,17 @@ rather than BF16 (0.95+0.95 GB vs 1.91+1.91), and torch.compile is off with no
 measurable cost. The 8-stream figure is **after** fixing the GDN slot clamp — before it,
 the same config managed only 107.4 tok/s because concurrency was capped at 6.
 
+### Multi-Condition Standard Benchmark Suite
+
+To thoroughly characterize the live serving performance under varying operational conditions, we run a 6-axis standard benchmark suite (`scripts/bench-standard-suite.py`). Full tabulated logs are in [results/standard-benchmark-results.md](results/standard-benchmark-results.md) and [results/standard-benchmark-results.json](results/standard-benchmark-results.json):
+
+1. **Workload Predictability (Batch=1)**: Speculative decode throughput varies from **25.09 tok/s** on high-entropy prose to **59.93 tok/s** on step-by-step math (**2.39× spread**; code generation at **44.08 tok/s**, code refactoring at **52.02 tok/s**, JSON at **54.22 tok/s**).
+2. **Concurrency & Saturation**: Scales from **39.83 tok/s** at 1 stream to a peak of **198.63 aggregate tok/s** at 8 concurrent streams (24.8 tok/s per user, 266 ms TTFT). At 16 streams, throughput holds at **194.28 agg tok/s** with queueing.
+3. **Context / Prompt Length Scaling**: Prefill throughput reaches **2,000 – 3,260 prompt tok/s** for medium-to-long prompts (TTFT scales smoothly from 0.22 s at 128 tokens to 18.4 s at 38k prompt tokens).
+4. **Radix Prefix Caching**: Reusing a ~4.8k token document context reduces TTFT from **2,286 ms** (cold) down to **201 ms** (warm), providing an **11.33× TTFT speedup**.
+5. **Decode Horizon Stability**: Generation rate remains flat across sequence lengths (**35.05 tok/s** at 64 tokens, **31.66 tok/s** at 1024 tokens; ITL ~31 ms).
+6. **Reasoning / Thinking Mode**: DFlash2 maintains high throughput during active chain-of-thought generation (**52.22 tok/s** with `enable_thinking=True` vs **53.44 tok/s** with `enable_thinking=False`).
+
 ### Reading the numbers
 
 **Prefill is flat and acceptance explains everything.** Speculative decoding only touches
@@ -282,6 +293,7 @@ always `(1−frac) × total`, so the guard is exact. Upstream reports a hard reb
 
 ```
 scripts/run-sglang.sh          launcher; SPEC/MEM_FRAC/MAX_TOTAL/CG_MAX_BS/UPSTREAM_TREE knobs
+scripts/bench-standard-suite.py multi-condition benchmark: 6-axis suite across workloads/concurrency/context/caching
 scripts/bench-dflash2.sh       one arm end-to-end: workloads, concurrency, vision, GSM8K
 scripts/bench-workloads.py     batch-1 decode by workload type (the acceptance-sensitive axis)
 scripts/bench-qwen38.py        throughput / accuracy / vision modes
