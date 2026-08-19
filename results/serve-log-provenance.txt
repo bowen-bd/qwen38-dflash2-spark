@@ -1,0 +1,26 @@
+Serve-log provenance per arm -- what each server actually loaded.
+Full serve logs are ~140 KB each and are intentionally not committed.
+
+===== A dspark / fork build / NVFP4 head =====
+  [2026-08-19 15:39:16] Load weight end. elapsed=142.93 s, type=Qwen3_5ForConditionalGeneration, quant=modelopt_mixed, quant_algo=MIXED_PRECISION, avail mem=65.87 GB
+  [2026-08-19 15:39:33] Load weight end. elapsed=15.98 s, type=DSparkDraftModel, avail mem=62.80 GB, mem usage=3.03 GB.
+  [2026-08-19 15:39:34] KV Cache is allocated. dtype: torch.float8_e4m3fn, #tokens: 200000, K size: 3.05 GB, V size: 3.05 GB
+  [2026-08-19 15:39:35] KV Cache is allocated. dtype: torch.bfloat16, #tokens: 200000, K size: 1.91 GB, V size: 1.91 GB
+  [2026-08-19 15:45:14] max_total_num_tokens=200000, chunked_prefill_size=8192, max_prefill_tokens=16384, max_running_requests=8, context_len=262144, available_gpu_m
+  mean accept len: 3.32 over 168 decode batches
+
+===== B dspark / upstream tree / BF16 head =====
+  [2026-08-19 17:49:39] Load weight end. elapsed=154.81 s, type=Qwen3_5ForConditionalGeneration, quant=modelopt_mixed, quant_algo=MIXED_PRECISION, avail mem=65.82 GB
+  [2026-08-19 17:49:53] Load weight end. elapsed=13.08 s, type=DSparkDraftModel, avail mem=62.48 GB, mem usage=3.04 GB.
+  [2026-08-19 17:49:55] KV Cache is allocated. dtype: torch.float8_e4m3fn, #tokens: 200000, K size: 3.05 GB, V size: 3.05 GB
+  [2026-08-19 17:49:55] KV Cache is allocated. dtype: torch.bfloat16, #tokens: 200000, K size: 1.91 GB, V size: 1.91 GB
+  [2026-08-19 17:55:34] max_total_num_tokens=200000, chunked_prefill_size=8192, max_prefill_tokens=16384, max_running_requests=8, context_len=262144, available_gpu_m
+  mean accept len: 3.29 over 169 decode batches
+
+===== C dflash2 / upstream tree / BF16 head =====
+  [2026-08-19 17:28:51] Load weight end. elapsed=132.86 s, type=Qwen3_5ForConditionalGeneration, quant=modelopt_mixed, quant_algo=MIXED_PRECISION, avail mem=65.95 GB
+  [2026-08-19 17:29:20] Load weight end. elapsed=27.80 s, type=DFlash2DraftModel, avail mem=61.86 GB, mem usage=4.04 GB.
+  [2026-08-19 17:29:22] KV Cache is allocated. dtype: torch.float8_e4m3fn, #tokens: 200000, K size: 3.05 GB, V size: 3.05 GB
+  [2026-08-19 17:29:22] KV Cache is allocated. dtype: torch.bfloat16, #tokens: 200000, K size: 1.91 GB, V size: 1.91 GB
+  [2026-08-19 17:35:08] max_total_num_tokens=200000, chunked_prefill_size=8192, max_prefill_tokens=16384, max_running_requests=8, context_len=262144, available_gpu_m
+  mean accept len: 5.03 over 109 decode batches

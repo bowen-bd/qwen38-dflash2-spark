@@ -1,0 +1,86 @@
+
+===== ARM: dspark-ctl =====
+2026-08-19 13:47:30
+healthy after 510s
+--- footprint: python3, 218 MiB sglang::scheduler, 49897 MiB 
+--- MemAvailable=34.3 GiB used=87.4 GiB
+[2026-08-19 17:49:39] Load weight end. elapsed=154.81 s, type=Qwen3_5ForConditionalGeneration, quant=modelopt_mixed, quant_algo=MIXED_PRECISION, avail mem=65.82 GB, mem usage=23.00 GB.
+[2026-08-19 17:49:53] Load weight end. elapsed=13.08 s, type=DSparkDraftModel, avail mem=62.48 GB, mem usage=3.04 GB.
+[2026-08-19 17:49:55] KV Cache is allocated. dtype: torch.float8_e4m3fn, #tokens: 200000, K size: 3.05 GB, V size: 3.05 GB
+[2026-08-19 17:49:55] KV Cache is allocated. dtype: torch.bfloat16, #tokens: 200000, K size: 1.91 GB, V size: 1.91 GB
+[2026-08-19 17:55:34] max_total_num_tokens=200000, chunked_prefill_size=8192, max_prefill_tokens=16384, max_running_requests=8, context_len=262144, available_gpu_mem=36.16 GB
+
+--- workloads (batch-1 decode, thinking off)
+model=qwen3.8-27b  batch-1 decode, thinking off, temperature 0
+
+workload                            tok/s   tokens
+----------------------------------------------------
+free-form prose                     14.87      400
+technical explanation               19.51      400
+math / structured reasoning         25.50      400
+code generation                     25.73      400
+code editing (repeat + modify)      29.70      400
+JSON structured output              31.09      400
+----------------------------------------------------
+spread: 14.9 tok/s (free-form prose) -> 31.1 tok/s (JSON structured output)
+
+--- concurrency + prefill
+model=qwen3.8-27b  endpoint=http://127.0.0.1:30000/v1
+
+== warmup ==
+
+== single-stream decode (short prompt, 256 new tokens) ==
+  run 1: ttft=    233 ms   244 tok  decode= 15.27 tok/s
+  run 2: ttft=    228 ms   196 tok  decode= 13.41 tok/s
+  run 3: ttft=    232 ms   214 tok  decode= 15.42 tok/s
+  -> median single-stream decode: 15.27 tok/s
+
+== prefill (TTFT vs prompt length) ==
+  ~  1423 tok prompt: ttft=  0.57 s  ->     2498 tok/s prefill
+  ~  5660 tok prompt: ttft=  1.76 s  ->     3208 tok/s prefill
+  ~ 22610 tok prompt: ttft=  7.39 s  ->     3058 tok/s prefill
+
+== concurrent aggregate decode (256 new tokens each) ==
+  conc=  1:   256 tok in  15.49 s ->   16.53 tok/s aggregate (16.53 tok/s per stream)
+  conc=  2:   512 tok in  16.89 s ->   30.32 tok/s aggregate (15.16 tok/s per stream)
+  conc=  4:  1024 tok in  17.35 s ->   59.02 tok/s aggregate (14.76 tok/s per stream)
+  conc=  8:  2048 tok in  21.31 s ->   96.11 tok/s aggregate (12.01 tok/s per stream)
+
+--- vision (1 chart)
+Based on the provided bar chart titled "Qwen3.8-27B on DGX Spark GB10", here are the values for each bar:
+
+- **Q4_K_XL**: 11.6 tok/s, 17.9 GB
+- **NVFP4**: 21.4 tok/s, 22.5 GB
+- **FP8**: 8.2 tok/s, 30.9 GB
+- **BF16**: 3.1 tok/s, 54.7 GB
+
+[3.8s, 117 completion tokens]
+
+--- accuracy GSM8K 150 (identical settings to the DSpark baseline)
+    10/150  running acc=100.0%
+    20/150  running acc=95.0%
+    30/150  running acc=96.7%
+    40/150  running acc=97.5%
+    50/150  running acc=98.0%
+    60/150  running acc=98.3%
+    70/150  running acc=98.6%
+    80/150  running acc=97.5%
+    90/150  running acc=97.8%
+    100/150  running acc=96.0%
+    110/150  running acc=96.4%
+    120/150  running acc=96.7%
+    130/150  running acc=96.2%
+    140/150  running acc=96.4%
+    150/150  running acc=96.0%
+
+  GSM8K 144/150 = 96.0%   effort=none   errors=0
+  50780 completion tokens, 475s wall, 106.9 tok/s aggregate, 339 tok/question
+  first misses (gold -> got): [('13', 7.0), ('25000', 50000.0), ('44', 48.0), ('36', 38.0), ('95200', 560.0), ('70', 22.0)]
+
+--- acceptance length from server log (spec decoding efficiency)
+mean accept len over last 40 decode batches: 4.05
+
+--- footprint after: python3, 238 MiB sglang::scheduler, 52735 MiB 
+--- MemAvailable=31.9 GiB used=89.8 GiB
+===== ARM dspark-ctl DONE =====
+2026-08-19 14:11:35

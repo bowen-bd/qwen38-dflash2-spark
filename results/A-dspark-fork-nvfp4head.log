@@ -1,0 +1,86 @@
+===== RETEST BASELINE (idle) =====
+2026-08-19 11:22:22
+MemAvailable=98.0 GiB used=23.7 GiB
+gpu apps: []
+
+===== SGLANG + DSPARK  (MEM_FRAC 0.78, idle machine) =====
+2026-08-19 11:23:33
+
+### NOTE: attempts at 15:22 and 15:29 UTC were aborted --
+###  1st: uncapped KV took 744,276 tokens / 36.9 GiB, leaving only 10.4 GiB free.
+###  2nd: the previous session's ab-test.sh (pid 1412332) was still alive; its
+###       EAGLE health-wait expired and its quiesce killed the container mid-load.
+### Zombie killed, KV capped to 200,000 tokens. Clean run below.
+
+===== SGLANG + DSPARK  (MEM_FRAC 0.78, idle machine) =====
+2026-08-19 11:36:36
+healthy after 550s
+--- footprint: python3, 1242 MiB sglang::scheduler, 47843 MiB 
+--- MemAvailable=34.8 GiB used=86.9 GiB
+
+--- KV pool as sized by sglang
+[2026-08-19 15:39:34] KV Cache is allocated. dtype: torch.float8_e4m3fn, #tokens: 200000, K size: 3.05 GB, V size: 3.05 GB
+[2026-08-19 15:39:35] KV Cache is allocated. dtype: torch.bfloat16, #tokens: 200000, K size: 1.91 GB, V size: 1.91 GB
+[2026-08-19 15:45:14] max_total_num_tokens=200000, chunked_prefill_size=8192, max_prefill_tokens=16384, max_running_requests=8, context_len=262144, available_gpu_mem=36.37 GB
+
+--- workloads (batch-1 decode, thinking off)
+model=qwen3.8-27b  batch-1 decode, thinking off, temperature 0
+
+workload                            tok/s   tokens
+----------------------------------------------------
+free-form prose                     17.61      400
+technical explanation               20.09      400
+math / structured reasoning         32.12      400
+code generation                     29.77      400
+code editing (repeat + modify)      40.02      400
+JSON structured output              40.31      400
+----------------------------------------------------
+spread: 17.6 tok/s (free-form prose) -> 40.3 tok/s (JSON structured output)
+
+--- concurrency + prefill
+model=qwen3.8-27b  endpoint=http://127.0.0.1:30000/v1
+
+== warmup ==
+
+== single-stream decode (short prompt, 256 new tokens) ==
+  run 1: ttft=    208 ms   239 tok  decode= 15.34 tok/s
+  run 2: ttft=    220 ms   228 tok  decode= 16.16 tok/s
+  run 3: ttft=    210 ms   216 tok  decode= 16.11 tok/s
+  -> median single-stream decode: 16.11 tok/s
+
+== prefill (TTFT vs prompt length) ==
+  ~  1423 tok prompt: ttft=  0.56 s  ->     2545 tok/s prefill
+  ~  5660 tok prompt: ttft=  1.75 s  ->     3227 tok/s prefill
+  ~ 22610 tok prompt: ttft=  8.11 s  ->     2786 tok/s prefill
+
+== concurrent aggregate decode (256 new tokens each) ==
+  conc=  1:   256 tok in  14.36 s ->   17.83 tok/s aggregate (17.83 tok/s per stream)
+  conc=  2:   512 tok in  13.47 s ->   38.01 tok/s aggregate (19.00 tok/s per stream)
+  conc=  4:  1024 tok in  15.68 s ->   65.30 tok/s aggregate (16.32 tok/s per stream)
+  conc=  8:  2048 tok in  19.55 s ->  104.74 tok/s aggregate (13.09 tok/s per stream)
+
+--- vision (1 chart)
+Based on the chart provided, here are the values for each bar:
+
+- **Q4_K_XL**:
+  - **11.6 tok/s**
+  - **17.9 GB**
+
+- **NVFP4**:
+  - **21.4 tok/s**
+  - **22.5 GB**
+
+- **FP8**:
+  - **8.2 tok/s**
+  - **30.9 GB**
+
+- **BF16**:
+  - **3.1 tok/s**
+  - **54.7 GB**
+
+[3.0s, 126 completion tokens]
+
+--- footprint after: python3, 1262 MiB sglang::scheduler, 50675 MiB 
+--- MemAvailable=35.8 GiB used=85.9 GiB
+===== RETEST DONE =====
+2026-08-19 11:52:23

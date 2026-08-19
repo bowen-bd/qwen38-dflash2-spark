@@ -1,0 +1,236 @@
+# Qwen3.8-27B NVFP4 + DFlash2 on a DGX Spark (GB10)
+
+Measured 2026-08-19 on a single NVIDIA DGX Spark (GB10, 121.7 GiB unified memory,
+CUDA 13.0), serving `RadixArk/Qwen3.8-27B-NVFP4` under SGLang.
+
+DFlash2 landed upstream in SGLang on **2026-08-19** ([PR #35371]). Its published
+numbers are a **BF16 target on an H200** — Hopper, which has no FP4 tensor cores — so
+the NVFP4 path had never been exercised. This repo is what happened when we ran it on
+one: **two blocking bugs**, a fix for the more serious one, and a three-arm benchmark
+that separates the drafter's contribution from the cost of the stack change needed to
+get it.
+
+[PR #35371]: https://github.com/sgl-project/sglang/pull/35371
+
+## TL;DR
+
+- **DFlash2 does not run on an NVFP4 target at all.** Its candidate selector requires a
+  dense FP16/BF16/FP32 `lm_head`. Fixed here by dequantizing that one tensor.
+- **A second bug** kills it whenever `max-running-requests > cuda-graph-max-bs` — the
+  combination upstream's own `run.sh` ships.
+- With both worked around, DFlash2 is **+41% to +54% faster than DSpark across every
+  workload** on an identical stack, and **+61% at 8 concurrent streams**, from acceptance
+  length **3.29 → 5.03** tokens per verification pass.
+- **No accuracy loss:** 144/150 on GSM8K for both drafters, identical.
+- **Costs +3.0 GB** of memory, ~1.0 GB of which is the larger drafter.
+
+## The three arms
+
+Everything held constant except where noted: same NVFP4 body, same 200,000-token KV
+cap, same prompts, idle machine, thinking disabled, temperature 0.
+
+| | drafter | engine | `lm_head` | `cuda-graph-max-bs` |
+|---|---|---|---|---|
+| **A** | DSpark | fork image (`lmsysorg/sglang:qwen38-27b`, built 2026-08-14) | NVFP4 | 4 |
+| **B** | DSpark | upstream `main` tree overlay | BF16 (dequantized) | 8 |
+| **C** | **DFlash2** | upstream `main` tree overlay | BF16 (dequantized) | 8 |
+
+**A** is the production baseline. **C** is the DFlash2 candidate. **B** is the control that
+makes the comparison honest: DFlash2 cannot run on A's stack, so C-vs-A mixes the drafter
+with the stack change. B changes *only* the stack, so **C vs B isolates the drafter**.
+
+## Results
+
+Batch-1 decode, tok/s:
+
+| Workload | A | B | **C** | C vs B<br>*(drafter)* | C vs A<br>*(end-to-end)* |
+|---|---|---|---|---|---|
+| Free-form prose | 17.61 | 14.87 | **22.64** | **+52%** | +29% |
+| Technical explanation | 20.09 | 19.51 | **30.13** | **+54%** | +50% |
+| Math / structured | 32.12 | 25.50 | **39.12** | **+53%** | +22% |
+| Code generation | 29.77 | 25.73 | **38.12** | **+48%** | +28% |
+| Code editing (rewrite) | 40.02 | 29.70 | **43.17** | **+45%** | +8% |
+| JSON structured | 40.31 | 31.09 | **43.70** | **+41%** | +8% |
+
+| | A | B | **C** | C vs B | C vs A |
+|---|---|---|---|---|---|
+| Single-stream decode | 16.11 | 15.27 | **23.54** | **+54%** | +46% |
+| 1 concurrent (agg) | 17.83 | 16.53 | **30.36** | +84% | +70% |
+| 2 concurrent | 38.01 | 30.32 | **56.00** | +85% | +47% |
+| 4 concurrent | 65.30 | 59.02 | **88.03** | +49% | +35% |
+| **8 concurrent** | 104.74 | 96.11 | **154.30** | **+61%** | +47% |
+| Vision, per chart | 3.0 s | 3.8 s | **2.6 s** | +32% | +13% |
+| TTFT | 208–220 ms | 228–233 ms | 232–234 ms | ~0 | slightly worse |
+| Prefill @1.4K/5.7K/22.6K | 2545/3227/2786 | 2498/3208/3058 | 2436/3148/3037 | ~0 | ~0 |
+| **Mean acceptance length** | **3.32** | **3.29** | **5.03** | **+53%** | +51% |
+| **GSM8K (150 q)** | 143/150 | **144/150** | **144/150** | **0** | +1 |
+| Footprint, steady state | 50,675 MiB | 52,735 MiB | 53,733 MiB | +998 MiB | +3,058 MiB |
+
+### Reading the numbers
+
+**Prefill is flat and acceptance explains everything.** Speculative decoding only touches
+decode, and prefill is unchanged across all three arms — the sanity check that nothing else
+moved. The entire speedup is acceptance length: 3.29 → 5.03 tokens per verification pass.
+
+**The stack tax is real: −3% to −26% (B vs A).** Two causes are bundled: the dense BF16
+head streams 2.54 GB per forward pass instead of NVFP4's 0.64 GB, and decode here is
+bandwidth-bound; plus the upstream tree lacks the fork's GB10 tuning. The decisive evidence
+that this is *not* a drafter effect is that **acceptance is identical across builds**
+(3.32 vs 3.29) — DSpark speculates the same on both, so the loss is pure per-pass cost.
+
+**So C-vs-A understates DFlash2.** The +8% on code editing is the drafter's +45% minus the
+stack's −26%. Most of that tax should disappear once the fork rebases onto a post-2026-08-19
+upstream, leaving the +41–54%.
+
+**Accuracy is unchanged.** B and C both score 144/150 — with the stack held constant the
+drafter changes accuracy by exactly zero questions, as losslessness predicts. The 143→144
+between A and B is the head dtype, not the drafter. At n=150 the standard error is ±1.8 pt,
+so this bounds the loss at roughly ±2 pt, not tighter.
+
+**Memory: +3.0 GB total, ~1.0 GB of it the drafter.** The drafter figure is confirmed twice
+(drafter `mem usage` 3.03 → 4.04 GB; nvidia-smi B→C +998 MiB). The remaining ~2.06 GB mixes
+the BF16 head with the upstream build and cannot be cleanly split — the per-model `mem usage`
+counter is ±0.6 GB noisy (arms B and C load the *same* target and report 23.00 vs 22.43 GB).
+
+## The `lm_head` problem
+
+DFlash2's selector reads the target's `lm_head` directly to get its top-16 candidates per
+position, and the guard is a pure dtype test (`srt/speculative/dflash_utils.py:678`):
+
+```python
+def is_dense_head_weight(weight: Any) -> bool:
+    return weight is not None and weight.dtype in _DENSE_HEAD_DTYPES
+```
+
+An NVFP4 head is packed `U8`, so it fails and `compute_candidates` raises. Upstream *does*
+screen the head in `_maybe_build_draft_sampler` (line 487) and returns
+`_eager("quantized lm_head")`, so it is meant to degrade gracefully — but the eager fallback
+still routes through `compute_candidates`. Upstream also has a quantized-head path,
+`_greedy_sample_from_quantized_head` (line 1069), but only for DFlash **v1**'s greedy
+sampler; the v2 selector never got one. vLLM's [PR #52883] does not close this either — it
+only widens a type check so heads that are *already* unquantized stop being falsely
+rejected. **There is currently no working quantized-head path in either engine.**
+
+[PR #52883]: https://github.com/vllm-project/vllm/pull/52883
+
+Three ways to give it a dense head:
+
+| approach | fidelity | memory | notes |
+|---|---|---|---|
+| `patch_lmhead_nvfp4.py` | cosine **0.9955** | +2.54 GB | dequantizes NVFP4 exactly — dense, *not* more accurate |
+| `swap_native_head.py` | cosine **1.000000** | +2.54 GB | drops in the official FP8 checkpoint's genuinely unquantized BF16 head |
+| full BF16 target | 1.0 | +24 GB | what upstream benchmarked; defeats the point of NVFP4 |
+
+`swap_native_head.py` is strictly better than dequantizing at identical cost, and may also
+raise acceptance, since the selector picks candidates *through* that head.
+
+### Decoding NVFP4 correctly
+
+`lm_head` is stored as `weight` `U8 [248320, 2560]` (two E2M1 nibbles per byte),
+`weight_scale` `F8_E4M3 [248320, 320]` (one FP8 scale per 16-element block), and a global
+F32 `weight_scale_2`:
+
+```
+W[i,j] = e2m1(nibble) * f8e4m3(weight_scale[i, j//16]) * weight_scale_2
+```
+
+Nibble order was **verified, not assumed** — element `2k` is the *low* nibble of byte `k`.
+Validated against the official FP8 checkpoint's dense BF16 head, which is the same weights
+unquantized:
+
+| decode | cosine vs reference |
+|---|---|
+| **low-nibble-first** | **0.995463** |
+| high-nibble-first | 0.001564 |
+
+0.9955 is exactly NVFP4's own quantization error. Getting this backwards would silently
+corrupt the output head — and because the *target* uses that head for its real logits, not
+just the drafter, it would quietly degrade quality rather than crash.
+
+## Bugs worth filing
+
+1. **DFlash2's selector cannot use a quantized `lm_head`**, and the eager fallback raises
+   instead of degrading. Blocks every NVFP4/FP8 deployment. See
+   [`results/dflash2-failures.md`](results/dflash2-failures.md).
+2. **`max-running-requests > cuda-graph-max-bs` crashes DFlash2.**
+   `_SelectorDraftSampler` allocates `greedy_mask`/`temperatures`/`candidate_out` at
+   `cuda_graph_max_bs` — addresses baked into the captured graph — then
+   `stage_sampling_params()` indexes them with the live batch size:
+   `RuntimeError: The size of tensor a (4) must match the size of tensor b (8)`.
+   Upstream's own `run.sh` ships `4` with `8`; harmless for DSpark/MTP, fatal here.
+
+## Reproducing
+
+No CUDA image contains DFlash2 yet (newest nightly at time of writing: `20260818`, the PR
+merged the 19th). The image here is a **fork** — `561c8f3` is not an upstream commit, and it
+lacks `mamba_extra_buffer_enabled` — so overlaying just the PR's three files fails on import.
+Overlaying the *whole* upstream Python tree onto the fork's compiled kernels works, imports
+cleanly, and keeps the engine build constant across arms:
+
+```bash
+git clone --depth 1 --filter=blob:none --sparse https://github.com/sgl-project/sglang.git
+cd sglang && git sparse-checkout set python/sglang
+```
+
+Then give the target a dense head and serve:
+
+```bash
+python3 scripts/patch_lmhead_nvfp4.py  radixark-nvfp4  radixark-nvfp4-dflash2
+# better: python3 scripts/swap_native_head.py radixark-nvfp4-dflash2 qwen38-27b-fp8 radixark-nvfp4-bf16head
+
+MEM_FRAC=0.78 MAX_TOTAL=200000 SPEC=DFLASH2 CG_MAX_BS=8 WEIGHTS_GIB=36.6 \
+  MODEL_DIR=$PWD/radixark-nvfp4-dflash2 \
+  DRAFT_DIR=$PWD/dflash2-drafter \
+  UPSTREAM_TREE=$PWD/sglang/python/sglang \
+  scripts/run-sglang.sh
+
+scripts/bench-dflash2.sh dflash2      # workloads, concurrency, prefill, vision, GSM8K
+```
+
+`SPEC` takes `DSPARK`, `DFLASH2`, or `EAGLE`. Drafter:
+`incoai/Qwen3.8-27B-DFlash2` (3.6 GB) — fetch with `scripts/pardl.py` if HF's Xet endpoint
+is unreachable, which it is on this host.
+
+### Two things that will bite you on GB10
+
+**Cap the KV cache.** Left alone, SGLang sized a **744,276-token** pool (36.9 GiB: 22.7 FP8
+attention + 14.2 BF16 mamba state) and left only 10.4 GiB of host memory free once
+torch.compile and graph capture were resident. On unified memory an OOM freezes the whole
+host, not just the process. `MAX_TOTAL=200000` is ample — the longest prompt here is 22.6K
+tokens — and recovers 27 GB at no cost to decode rate. `run-sglang.sh` refuses to launch
+below 8 GiB of headroom.
+
+**`--mem-fraction-static` is a share of the whole pool,** and SGLang derives "already used"
+from `total − free`, which on unified memory counts your desktop. Upstream's `0.50` assumes
+an idle Spark; `0.78` is what works here. Free-after is always `(1−frac) × total`, so 0.78
+reliably leaves 26.8 GiB.
+
+## Files
+
+```
+scripts/run-sglang.sh          launcher; SPEC/MEM_FRAC/MAX_TOTAL/CG_MAX_BS/UPSTREAM_TREE knobs
+scripts/bench-dflash2.sh       one arm end-to-end: workloads, concurrency, vision, GSM8K
+scripts/bench-workloads.py     batch-1 decode by workload type (the acceptance-sensitive axis)
+scripts/bench-qwen38.py        throughput / accuracy / vision modes
+scripts/patch_lmhead_nvfp4.py  NVFP4 lm_head -> dense BF16
+scripts/swap_native_head.py    swap in the FP8 checkpoint's native BF16 head instead
+scripts/pardl.py               parallel ranged-GET downloader (HF Xet is unreachable here)
+scripts/sglang/                chat template
+scripts/test-chart.png         vision benchmark input
+results/                       per-arm logs, curated failures, serve-log provenance
+```
+
+## Caveats
+
+- **n=150 on GSM8K** bounds accuracy at roughly ±1.8 pt. It does not rule out a sub-2-point
+  regression; the full 1,319-question set would tighten that to ±0.6 pt.
+- **Acceptance lengths** are means over each run's decode batches, and the arms cover
+  slightly different phase mixes, so treat them as approximate. A and B are directly
+  comparable (169 vs 168 batches on the same suite).
+- **Arm A's footprint** was sampled after vision but before its GSM8K run; B and C were
+  sampled after GSM8K.
+- **vLLM is not benchmarked here.** Its DFlash2 PR is still open, and its reviewers flagged
+  the same quantized-head gap.
+- The upstream-tree overlay is a **measurement vehicle, not a deployment**. For production,
+  wait for the fork to rebase onto post-2026-08-19 upstream, which should keep the drafter
+  gain and drop most of the stack tax.

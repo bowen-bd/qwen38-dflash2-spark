@@ -1,0 +1,19 @@
+    10/150  running acc=100.0%
+    20/150  running acc=95.0%
+    30/150  running acc=96.7%
+    40/150  running acc=97.5%
+    50/150  running acc=98.0%
+    60/150  running acc=96.7%
+    70/150  running acc=97.1%
+    80/150  running acc=97.5%
+    90/150  running acc=97.8%
+    100/150  running acc=95.0%
+    110/150  running acc=95.5%
+    120/150  running acc=95.8%
+    130/150  running acc=95.4%
+    140/150  running acc=95.7%
+    150/150  running acc=95.3%
+
+  GSM8K 143/150 = 95.3%   effort=none   errors=0
+  50788 completion tokens, 429s wall, 118.4 tok/s aggregate, 339 tok/question
+  first misses (gold -> got): [('13', 12.0), ('104', 5.0), ('44', 2.0), ('9360', 86.0), ('36', 11.0), ('95200', 1.4), ('70', 22.0)]

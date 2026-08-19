@@ -1,0 +1,15 @@
+# Superseded by results/dflash2-failures.md, which keeps the evidence without the
+# repeated per-thread urllib tracebacks.
+results/X-*.log
+
+# Full serve logs are ~140 KB each; results/serve-log-provenance.txt keeps the lines
+# that prove what each arm loaded.
+results/*-serve.log
+
+# Model checkpoints, drafters, benchmark data, engine caches.
+*.safetensors
+*.index.json
+gsm8k_test.*
+sglang-cache/
+__pycache__/
+*.pyc
