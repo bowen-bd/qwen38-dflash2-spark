@@ -153,9 +153,7 @@ the same config managed only 107.4 tok/s because concurrency was capped at 6.
 
 ### Multi-Condition Standard Benchmark Suite
 
-Measured with `scripts/bench-standard-suite.py`. Full raw logs and data are in
-[results/standard-benchmark-results.md](results/standard-benchmark-results.md) and
-[results/standard-benchmark-results.json](results/standard-benchmark-results.json).
+Measured with `scripts/bench-standard-suite.py`. Full standalone report is in [BENCHMARK.md](BENCHMARK.md); full raw logs and data are in [results/standard-benchmark-results.md](results/standard-benchmark-results.md) and [results/standard-benchmark-results.json](results/standard-benchmark-results.json).
 
 **This supersedes the A/B/C/P tables above for "how fast is it".** Those answer a
 different question — a *controlled* comparison isolating the drafter from the stack
