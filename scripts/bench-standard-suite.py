@@ -392,13 +392,17 @@ def test_thinking_mode_comparison():
 
 
 def main():
+    # `global` must precede any use of the name in this scope; reading URL/MODEL as
+    # argparse defaults above the declaration is a SyntaxError, not a runtime one, so
+    # the whole module failed to import.
+    global URL, MODEL
+
     parser = argparse.ArgumentParser(description="Multi-Condition Standard Benchmark Suite")
     parser.add_argument("--url", default=URL, help="OpenAI chat completions URL")
     parser.add_argument("--model", default=MODEL, help="Served model name")
     parser.add_argument("--output", default="standard-benchmark-results.json", help="Output JSON path")
     args = parser.parse_args()
 
-    global URL, MODEL
     URL = args.url
     MODEL = args.model
 

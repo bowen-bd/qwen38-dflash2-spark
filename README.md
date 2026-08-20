@@ -23,11 +23,12 @@ measurement nobody else published.
   **+61% at 8 streams**, from acceptance **3.29 → 5.03** tokens per verification pass.
 - **No accuracy loss.** With the stack held constant both drafters score **144/150** on
   GSM8K — identical, exactly as losslessness predicts.
-- **Production config is faster than any arm we built**: **+43% prose, +94% technical,
-  +87% math, +48% code gen** over the DSpark baseline, **198.6 tok/s aggregate at 8 streams**,
-  **145/150** on GSM8K, in **6.8 GB less memory** and a **4× faster start**. Full
-  characterisation in the [standard suite](#multi-condition-standard-benchmark-suite);
-  deployment in [deploy/](deploy/).
+- **The shipping config beats every arm we built**: **+43% prose,
+  +95% technical, +88% math,
+  +49% code gen** over the DSpark baseline,
+  **194.5 tok/s at 8 concurrent streams**, **145/150** on GSM8K, in
+  **6.8 GB less memory** and a **4× faster start** — because it never dequantizes the head.
+  See [Performance](#performance) and [deploy/](deploy/).
 
 > **Serving is delegated to [MiaAI-Lab/Qwen3.8-27B-SGLang-DGX-Spark][mia].** They solved
 > the `lm_head` problem better than we did — running the quantized head in place via
@@ -81,191 +82,74 @@ If findings 3 are upstreamed and accepted, that part of this repo's value merges
 theirs — which would be a good outcome, and the measurement and integration layers would
 remain.
 
-## The three arms
+## Performance
 
-Everything held constant except where noted: same NVFP4 body, same 200,000-token KV
-cap, same prompts, idle machine, thinking disabled, temperature 0.
+Full report with all six dimensions: **[BENCHMARK.md](BENCHMARK.md)**, generated from
+[`results/standard-benchmark-results.json`](results/standard-benchmark-results.json) by
+`scripts/render-benchmark-report.py`. Headline, single stream, thinking off:
 
-| | drafter | engine | `lm_head` | `cuda-graph-max-bs` |
-|---|---|---|---|---|
-| **A** | DSpark | fork image (`lmsysorg/sglang:qwen38-27b`, built 2026-08-14) | NVFP4 | 4 |
-| **B** | DSpark | upstream `main` tree overlay | BF16 (dequantized) | 8 |
-| **C** | **DFlash2** | upstream `main` tree overlay | BF16 (dequantized) | 8 |
+| Workload | Decode tok/s |
+| :--- | :---: |
+| Free-form prose | 25.23 |
+| Technical explanation | 39.27 |
+| Python code generation | 44.43 |
+| Code editing / refactor | 52.37 |
+| Structured JSON | 54.70 |
+| Step-by-step math | **60.40** |
 
-**A** is the production baseline. **C** is the DFlash2 candidate. **B** is the control that
-makes the comparison honest: DFlash2 cannot run on A's stack, so C-vs-A mixes the drafter
-with the stack change. B changes *only* the stack, so **C vs B isolates the drafter**.
+- **194.5 tok/s aggregate at 8 concurrent streams**
+  (283 ms TTFT). 16 streams is not a win — aggregate goes flat
+  (197.7) while TTFT degrades to 6204 ms,
+  because `--max-running-requests 8` admits eight and the rest queue.
+- **11.86× faster TTFT** on a warm radix prefix — which is why subagents sharing a system
+  prompt cost far less than N× one agent.
+- **No decode degradation to 1k output tokens**, and **thinking is nearly free**
+  (53.68 tok/s off vs 52.43 on) — it costs tokens, not throughput.
+- **Acceptance 3.98 tokens per verification pass** (2.23–7.08, ceiling 8). Decode is
+  memory-bandwidth-bound, so accepted-tokens-per-pass is very nearly the whole story —
+  it is what produces the 2.39× spread in the table above.
 
-## Results
+## The controlled experiment
 
-Batch-1 decode, tok/s:
+The numbers above characterise the shipping stack. They cannot tell you how much of it is
+*DFlash2* rather than the rest of the stack, because DFlash2 cannot run on the baseline
+configuration at all. That needed three arms, all at a 200k KV cap on the earlier overlay
+build:
 
-| Workload | A | B | **C** | C vs B<br>*(drafter)* | C vs A<br>*(end-to-end)* |
-|---|---|---|---|---|---|
-| Free-form prose | 17.61 | 14.87 | **22.64** | **+52%** | +29% |
-| Technical explanation | 20.09 | 19.51 | **30.13** | **+54%** | +50% |
-| Math / structured | 32.12 | 25.50 | **39.12** | **+53%** | +22% |
-| Code generation | 29.77 | 25.73 | **38.12** | **+48%** | +28% |
-| Code editing (rewrite) | 40.02 | 29.70 | **43.17** | **+45%** | +8% |
-| JSON structured | 40.31 | 31.09 | **43.70** | **+41%** | +8% |
+| | drafter | engine | `lm_head` |
+|---|---|---|---|
+| **A** | DSpark | fork image | NVFP4 |
+| **B** | DSpark | upstream overlay | BF16 |
+| **C** | **DFlash2** | upstream overlay | BF16 |
 
-| | A | B | **C** | C vs B | C vs A |
-|---|---|---|---|---|---|
-| Single-stream decode | 16.11 | 15.27 | **23.54** | **+54%** | +46% |
-| 1 concurrent (agg) | 17.83 | 16.53 | **30.36** | +84% | +70% |
-| 2 concurrent | 38.01 | 30.32 | **56.00** | +85% | +47% |
-| 4 concurrent | 65.30 | 59.02 | **88.03** | +49% | +35% |
-| **8 concurrent** | 104.74 | 96.11 | **154.30** | **+61%** | +47% |
-| Vision, per chart | 3.0 s | 3.8 s | **2.6 s** | +32% | +13% |
-| TTFT | 208–220 ms | 228–233 ms | 232–234 ms | ~0 | slightly worse |
-| Prefill @1.4K/5.7K/22.6K | 2545/3227/2786 | 2498/3208/3058 | 2436/3148/3037 | ~0 | ~0 |
-| **Mean acceptance length** | **3.32** | **3.29** | **5.03** | **+53%** | +51% |
-| **GSM8K (150 q)** | 143/150 | **144/150** | **144/150** | **0** | +1 |
-| Footprint, steady state | 50,675 MiB | 52,735 MiB | 53,733 MiB | +998 MiB | +3,058 MiB |
+**B is the control.** C vs A mixes the drafter with the stack change it forces; B changes
+only the stack, so **C vs B isolates the drafter**:
 
-### Production configuration — what you should actually run
+- **The drafter is worth +41% to +54% on every workload** and +61% at 8 streams, from
+  acceptance 3.29 → 5.03.
+- **The stack change cost −3% to −26%** on its own. The proof it is not a drafter effect:
+  acceptance is identical across builds (3.32 vs 3.29), so DSpark speculates the same on
+  both and the loss is pure per-pass cost — the dense BF16 head streams 2.54 GB per pass
+  instead of NVFP4's 0.64 GB. The shipping stack avoids this entirely by keeping the head
+  quantized, which is why it beats every arm here.
+- **Accuracy is unchanged by the drafter.** GSM8K, 150 questions, identical settings:
 
-Arm **P** is the [MiaAI-Lab][mia] stack (their image, their in-place quantized head, FP8
-mamba state) plus our three corrections. Same prompts, same 200k KV cap, idle machine.
+  | arm | GSM8K | note |
+  |---|---|---|
+  | A — DSpark, NVFP4 head | 143/150 | |
+  | B — DSpark, BF16 head | 144/150 | |
+  | C — DFlash2, BF16 head | 144/150 | **identical to B** — the drafter changes nothing |
+  | D — DFlash2, native BF16 head | 145/150 | highest head fidelity |
 
-| | **A** DSpark baseline | **C** our DFlash2 | **P** production (latest) | P vs A |
-|---|---|---|---|---|
-| Free-form prose | 17.61 | 22.64 | **25.09** | **+42%** |
-| Technical explanation | 20.09 | 30.13 | **39.00** | **+94%** |
-| Math / structured | 32.12 | 39.12 | **59.93** | **+87%** |
-| Code generation | 29.77 | 38.12 | **44.08** | **+48%** |
-| Code editing | 40.02 | 43.17 | **52.02** | **+30%** |
-| JSON structured | 40.31 | 43.70 | **54.22** | **+34%** |
-| Single-stream decode | 16.11 | 23.54 | **39.83** | **+147%** |
-| 8 concurrent (agg) | 104.74 | 154.30 | **198.63** | **+90%** |
-| Prefill @22.6K / 32K | 2786 | 3037 | **3262** | +17% |
-| Vision, per chart | 3.0 s | 2.6 s | **2.8 s** | +7% |
-| **GSM8K (150 q)** | 143/150 | 144/150 | **145/150** | **+2** |
-| Footprint | 50,675 MiB | 53,733 MiB | **45,582 MiB** | **−5.1 GB** |
-| Time to ready | 550 s | 510 s | **130 s** | **4× faster** |
+  With the stack held constant the drafter moves accuracy by *zero* questions, which is
+  what losslessness predicts. At n=150 the standard error is ±1.8 pt, so all four are
+  statistically indistinguishable and the honest claim is "no detectable loss".
+- **Memory: +3.0 GB**, ~1.0 GB of it the larger drafter (confirmed twice: drafter
+  `mem usage` 3.03 → 4.04 GB, and nvidia-smi B→C +998 MiB).
 
-It is faster than every arm we built, on less memory, with better accuracy, and starts
-four times quicker. Three reasons, none of them the drafter: the head is never
-dequantized (−2.5 GB and −1.9 GB of streamed weights per pass), the mamba state is FP8
-rather than BF16 (0.95+0.95 GB vs 1.91+1.91), and torch.compile is off with no
-measurable cost. The 8-stream figure is **after** fixing the GDN slot clamp — before it,
-the same config managed only 107.4 tok/s because concurrency was capped at 6.
-
-### Multi-Condition Standard Benchmark Suite
-
-Measured with `scripts/bench-standard-suite.py`. The six tables below are the
-decision-relevant subset of the standalone report in [BENCHMARK.md](BENCHMARK.md), which
-adds per-condition commentary; raw data is in
-[results/standard-benchmark-results.md](results/standard-benchmark-results.md) and
-[results/standard-benchmark-results.json](results/standard-benchmark-results.json).
-
-**This supersedes the A/B/C/P tables above for "how fast is it".** Those answer a
-different question — a *controlled* comparison isolating the drafter from the stack
-change it requires, run at a 200k KV cap on an earlier config. This suite exercises the
-shipping configuration (262k KV pool, 8 concurrent slots) across more conditions, which
-is why every number here is higher.
-
-#### 1. Workload Diversity & Predictability (Single-Stream, Batch = 1)
-*400 completion tokens per workload, median over 3 runs*
-
-| Workload Domain | Decode (tok/s) | TTFT (ms) | Inter-Token Latency (ms) |
-| :--- | :---: | :---: | :---: |
-| **Free-form Creative Prose** | **25.09** | 188.3 | 39.95 |
-| **Technical Explanation** | **39.00** | 219.9 | 25.71 |
-| **Python Code Generation** | **44.08** | 217.4 | 22.74 |
-| **Code Editing / Refactor** | **52.02** | 201.4 | 19.27 |
-| **Structured JSON Output** | **54.22** | 196.5 | 18.49 |
-| **Step-by-Step Math / Reasoning** | **59.93** | 191.7 | 16.73 |
-
-#### 2. Concurrency & Throughput Scaling (300 tokens / stream)
-
-| Concurrency ($C$) | Aggregate Throughput | Per-Stream Speed | Avg TTFT | Total Wall Time |
-| :---: | :---: | :---: | :---: | :---: |
-| **1** | **39.83 tok/s** | 39.83 tok/s | 146.9 ms | 7.53 s |
-| **2** | **63.58 tok/s** | 31.79 tok/s | 842.6 ms | 9.44 s |
-| **4** | **118.59 tok/s** | 29.65 tok/s | 227.7 ms | 10.12 s |
-| **8** | **198.63 tok/s** | 24.83 tok/s | 266.3 ms | 12.08 s |
-| **16** | **194.28 tok/s** | 12.14 tok/s | 6,352.4 ms | 24.71 s |
-
-**Throughput saturates at 8, and 16 is worse than useless.** Aggregate goes flat
-(198.6 → 194.3) while average TTFT degrades **24×** (266 ms → 6,352 ms), because
-`--max-running-requests 8` admits eight and the rest queue. To go beyond eight you must
-raise *both* that and the GDN pool (`concurrency × 5` slots) — raising one alone silently
-clamps you back.
-
-#### 3. Context / Prompt Scaling (Prefill Throughput & TTFT)
-
-| Prompt Context | TTFT | Prefill Speed | Generation Speed |
-| :---: | :---: | :---: | :---: |
-| **128 tokens** | **0.220 s** | 599.9 tok/s | 19.8 tok/s |
-| **1,024 tokens** | **0.324 s** | 1,845.1 tok/s | 19.7 tok/s |
-| **4,096 tokens** | **1.069 s** | 2,216.6 tok/s | 19.6 tok/s |
-| **16,384 tokens** | **4.640 s** | 2,037.3 tok/s | 17.2 tok/s |
-| **32,768 tokens** | **5.802 s** | 3,261.6 tok/s | 25.6 tok/s |
-| **65,536 tokens** | **18.424 s** | 2,055.3 tok/s | 25.1 tok/s |
-
-#### 4. Radix Prefix Caching & Reasoning Modes
-
-| Condition / Mode | Context / Tokens | TTFT | Decode Speed | Note |
-| :--- | :---: | :---: | :---: | :--- |
-| **Cold Request** (0% Cache) | 4,787 prompt | 2,286.3 ms | 19.6 tok/s | Baseline full prefill |
-| **Warm Request** (100% Cache) | 4,789 prompt | **201.8 ms** | 19.8 tok/s | **11.33× faster TTFT** |
-| **Thinking OFF** | 512 completion | 204.6 ms | **53.44 tok/s** | Direct output |
-| **Thinking ON** | 512 completion | 213.5 ms | **52.22 tok/s** | Sustained speed during CoT |
-
-#### 5. Decode Horizon — does long output slow down?
-
-*Technical treatise prompt, 64 → 1,024 output tokens*
-
-| Target tokens | Decode | Inter-token latency |
-| :---: | :---: | :---: |
-| **64** | 35.05 tok/s | 28.99 ms |
-| **128** | 34.31 tok/s | 29.38 ms |
-| **256** | 33.36 tok/s | 30.09 ms |
-| **512** | 28.88 tok/s | 34.69 ms |
-| **1,024** | 31.66 tok/s | 31.62 ms |
-
-**No degradation to 1k tokens** — 31–35 tok/s throughout, non-monotonic, so the spread is
-run-to-run noise rather than a trend. Neither the growing KV lookup nor the Mamba
-recurrent state costs measurable speed over an agent-length response.
-
-#### 6. Speculative acceptance — the mechanism behind all of the above
-
-From server telemetry during these runs: mean acceptance **2.6–6.4 tokens** per
-verification pass, i.e. **24–36%** acceptance on free-form prose versus **47–77%** on code,
-refactoring, and math. That single spread explains the entire 2.39× workload range —
-predictable output means the drafter's block survives verification, unpredictable output
-means it is discarded and you pay for the draft anyway.
-
-Note these are **not** the `3.29 → 5.03` figures in the A/B/C tables above: those were
-measured on the 200k-cap overlay stack to isolate the drafter, these on the shipping
-262k configuration. Same mechanism, different configurations.
-
-### Reading the numbers
-
-**Prefill is flat and acceptance explains everything.** Speculative decoding only touches
-decode, and prefill is unchanged across all three arms — the sanity check that nothing else
-moved. The entire speedup is acceptance length: 3.29 → 5.03 tokens per verification pass.
-
-**The stack tax is real: −3% to −26% (B vs A).** Two causes are bundled: the dense BF16
-head streams 2.54 GB per forward pass instead of NVFP4's 0.64 GB, and decode here is
-bandwidth-bound; plus the upstream tree lacks the fork's GB10 tuning. The decisive evidence
-that this is *not* a drafter effect is that **acceptance is identical across builds**
-(3.32 vs 3.29) — DSpark speculates the same on both, so the loss is pure per-pass cost.
-
-**So C-vs-A understates DFlash2.** The +8% on code editing is the drafter's +45% minus the
-stack's −26%. Most of that tax should disappear once the fork rebases onto a post-2026-08-19
-upstream, leaving the +41–54%.
-
-**Accuracy is unchanged.** B and C both score 144/150 — with the stack held constant the
-drafter changes accuracy by exactly zero questions, as losslessness predicts. The 143→144
-between A and B is the head dtype, not the drafter. At n=150 the standard error is ±1.8 pt,
-so this bounds the loss at roughly ±2 pt, not tighter.
-
-**Memory: +3.0 GB total, ~1.0 GB of it the drafter.** The drafter figure is confirmed twice
-(drafter `mem usage` 3.03 → 4.04 GB; nvidia-smi B→C +998 MiB). The remaining ~2.06 GB mixes
-the BF16 head with the upstream build and cannot be cleanly split — the per-model `mem usage`
-counter is ±0.6 GB noisy (arms B and C load the *same* target and report 23.00 vs 22.43 GB).
+Per-arm logs are in [`results/`](results/); provenance for what each server actually
+loaded is in
+[`results/serve-log-provenance.txt`](results/serve-log-provenance.txt).
 
 ## The `lm_head` problem
 
@@ -388,12 +272,23 @@ in place, all from [MiaAI-Lab][mia]'s `patch/`. Two things make the naive approa
   symbols the fork does not have, which is why a minimal overlay taken from HEAD
   cascades into a whole-tree swap.
 
-Benchmarks:
+Benchmarks. The suite plus renderer is the primary path — it regenerates every table in
+BENCHMARK.md from one JSON, so a rerun cannot leave stale numbers behind:
+
+```bash
+scripts/bench-standard-suite.py \
+    --url http://127.0.0.1:8888/v1/chat/completions \
+    --model qwen3.8-27b-sglang \
+    --output results/standard-benchmark-results.json
+scripts/render-benchmark-report.py                    # -> BENCHMARK.md
+```
+
+`scripts/bench-dflash2.sh` is the older per-arm driver, kept because it is what produced
+the controlled experiment (and it is the only one that runs GSM8K):
 
 ```bash
 scripts/bench-dflash2.sh myrun        # workloads, concurrency, prefill, vision, GSM8K
-OUT=/tmp/runs scripts/bench-dflash2.sh myrun
-URL=http://127.0.0.1:8888/v1 MODEL=qwen3.8-27b-sglang scripts/bench-dflash2.sh myrun
+OUT=/tmp/runs URL=http://127.0.0.1:8888/v1 MODEL=qwen3.8-27b-sglang scripts/bench-dflash2.sh myrun
 ```
 
 ### Two things that will bite you on GB10
@@ -415,6 +310,8 @@ always `(1−frac) × total`, so the guard is exact. Upstream reports a hard reb
 scripts/run-sglang.sh          launcher; SPEC/MEM_FRAC/MAX_TOTAL/CG_MAX_BS/UPSTREAM_TREE knobs
 scripts/bench-standard-suite.py multi-condition benchmark: 6-axis suite across workloads/concurrency/context/caching
 scripts/bench-dflash2.sh       one arm end-to-end: workloads, concurrency, vision, GSM8K
+scripts/bench-standard-suite.py  the 6-dimension suite that produces BENCHMARK.md
+scripts/render-benchmark-report.py  renders BENCHMARK.md from the suite's JSON
 scripts/bench-workloads.py     batch-1 decode by workload type (the acceptance-sensitive axis)
 scripts/bench-qwen38.py        throughput / accuracy / vision modes
 scripts/patch_lmhead_nvfp4.py  NVFP4 lm_head -> dense BF16
